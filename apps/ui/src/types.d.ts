@@ -9,6 +9,7 @@ export interface FileTreeItem {
   path: string;
   type: "file" | "folder";
   name: string;
+  isProjectRoot?: boolean;
 }
 
 export interface TabState {
@@ -266,7 +267,10 @@ declare global {
       };
       variables:{
         getKeys: () => Promise<string[]>;
-        writeVariables:(content:{[key:string]:string}) => Promise<void>;
+        read: () => Promise<Record<string, any>>;
+        get: (key: string) => Promise<any>;
+        set: (key: string, value: any) => Promise<boolean>;
+        writeVariables:(content:string | Record<string, any>) => Promise<void>;
       }
     };
   }

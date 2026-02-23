@@ -11,9 +11,10 @@ interface PostmanImportButtonProps {
     type: string;
     source?: string;
   };
+  showToast?: (message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
 
-export const PostmanImportButton = ({ tab }: PostmanImportButtonProps) => {
+export const PostmanImportButton = ({ tab, showToast }: PostmanImportButtonProps) => {
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -77,6 +78,9 @@ export const PostmanImportButton = ({ tab }: PostmanImportButtonProps) => {
 
       await importPostmanCollection(tab.content, activeProject, (current, total) => {
         setProgress({ current, total });
+      }, (itemName, error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        showToast?.(`Failed to import "${itemName}": ${message}`, 'error');
       });
 
       // Success - reset state
