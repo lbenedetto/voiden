@@ -10,7 +10,7 @@ Patch release adding timeout configuration and streamlining the startup process 
 
 ---
 
-## v1.1.2 — 23/02/2026
+## v1.1.21 — 23/02/2026
 
 Stable patch release focusing on cookie handling, environment variable merging, import accuracy, and developer workflow improvements.
 
