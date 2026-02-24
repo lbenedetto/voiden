@@ -101,13 +101,10 @@ if (isMac) {
   makers.push({
     name: "@felixrieseberg/electron-forge-maker-nsis",
     config: {
-      // Note: Code signing is handled by sign.js (referenced in package.json)
-      // which uses the WINDOWS_CERT_THUMBPRINT environment variable from .env
-      updater: {
-        url: `https://voiden.md/api/download/${releaseChannel}/win32/${process.arch}`,
-        updaterCacheDirName: "voiden-updater",
-        channel: "latest",
-      },
+      // Code signing is handled by sign.js (referenced in package.json build.win.sign)
+      // updater config removed: it generated a latest.yml with pre-signing hash that
+      // conflicted with the postMake hook's latest.yml (computed after signing).
+      // app-update.yml is now generated in packageAfterCopy for Windows.
     },
   });
 } else if (isLinux) {
@@ -172,7 +169,7 @@ const config: ForgeConfig = {
     // Generate app-update.yml in the packaged app's resources directory
     // This tells electron-updater where to check for updates (without needing electron-builder)
     packageAfterCopy: async (_config, buildPath, _electronVersion, platform, arch) => {
-      if (platform !== "darwin") return;
+      if (platform !== "darwin" && platform !== "win32") return;
 
       const resourcesPath = path.resolve(buildPath, "..");
       const yml = await getAppUpdateYml({
