@@ -142,7 +142,9 @@ async function openPath(inputPath: string): Promise<void> {
 }
 
 /**
- * Get CLI arguments, handling different execution contexts
+ * Get CLI arguments, handling different execution contexts.
+ * Filters out installer/updater flags (e.g. NSIS --updated, --force-run)
+ * so they don't trigger the CLI code path on restart after an update.
  */
 export function getCliArguments(): string[] {
   let args: string[];
@@ -158,7 +160,15 @@ export function getCliArguments(): string[] {
     args = process.argv.slice(1);
   }
 
-  return args;
+  // Filter out installer/updater flags that are not real user arguments.
+  // NSIS adds --updated and --force-run after a Windows update; Squirrel
+  // adds --squirrel-* flags. If these are the only args present, the app
+  // should go through the normal loadAllWindows() path, not the CLI path.
+  return args.filter(arg =>
+    !arg.startsWith('--updated') &&
+    !arg.startsWith('--force-run') &&
+    !arg.startsWith('--squirrel')
+  );
 }
 
 /**
