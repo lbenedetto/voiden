@@ -22,8 +22,8 @@ import {
   ArrowBigDown,
   Info,
   ChevronRight,
-  ChevronsDown,
-  ChevronsUp,
+  ChevronsDownUp,
+  ChevronsUpDown,
   File,
   Folder,
   FolderOpen,
@@ -737,31 +737,57 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode }: 
           </span>
         )}
         </div>
-        {
+         {
           node.data.type === "folder" && (
             <div className="flex items-center px-2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity">
-              <Tip label="Collapse all" side="bottom" align="end">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    collapseAllFromFolder(node);
-                  }}
-                  className="p-0.5 rounded hover:bg-hover ml-1"
+              <Tooltip.Root>
+                <Tooltip.Trigger asChild>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      collapseAllFromFolder(node);
+                    }}
+                    className="p-0.5 rounded hover:bg-hover ml-1"
+                  >
+                    <ChevronsDownUp size={12} />
+                  </button>
+                </Tooltip.Trigger>
+                <Tooltip.Content
+                  align="end"
+                  sideOffset={4}
+                  alignOffset={4}
+                  side="bottom"
+                  avoidCollisions
+                  collisionPadding={8}
+                  className="border text-comment bg-panel border-border p-1 text-sm z-10"
                 >
-                  <ChevronsUp size={12} />
-                </button>
-              </Tip>
-              <Tip label="Expand all" side="bottom" align="end">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    expandAllFromFolder(node);
-                  }}
-                  className="p-0.5 rounded hover:bg-hover"
+                  Collapse all
+                </Tooltip.Content>
+              </Tooltip.Root>
+              <Tooltip.Root>
+                <Tooltip.Trigger asChild>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      expandAllFromFolder(node);
+                    }}
+                    className="p-0.5 rounded hover:bg-hover"
+                  >
+                    <ChevronsUpDown size={12} />
+                  </button>
+                </Tooltip.Trigger>
+                <Tooltip.Content
+                  align="end"
+                  sideOffset={4}
+                  alignOffset={4}
+                  side="bottom"
+                  avoidCollisions
+                  collisionPadding={8}
+                  className="border text-comment bg-panel border-border p-1 text-sm z-10"
                 >
-                  <ChevronsDown size={12} />
-                </button>
-              </Tip>
+                  Expand all
+                </Tooltip.Content>
+              </Tooltip.Root>
             </div>
           )
         }
