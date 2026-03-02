@@ -110,7 +110,8 @@ declare global {
         showFileContextMenu: (data: FileTreeItem) => void;
         showBulkDeleteMenu: (data: FileTreeItem[]) => void;
         onFileMenuCommand: (callback: (command: string, data: FileTreeItem) => void) => () => void;
-        move: (dragIds: string[], parentId: string) => Promise<{ success: boolean; error?: string }>;
+        move: (dragIds: string[], parentId: string) => Promise<{ success: boolean; moved: string[]; conflicts: { dragId: string; targetPath: string; fileName: string }[]; error?: string }>;
+        moveForce: (conflicts: { dragId: string; targetPath: string; fileName: string }[]) => Promise<{ success: boolean; error?: string }>;
         deleteDirectory: (path: string) => Promise<boolean>;
         bulkDelete: (items: FileTreeItem[]) => Promise<boolean>;
         getFiles: (
@@ -119,6 +120,8 @@ declare global {
         ) => Promise<{ filePath: string; fileName: string; mimeType: string | null; data: string | null; error?: string }[]>;
         getVoidFiles: () => Promise<{ id: string; type: string; title: string; source: string; content: string }[]>;
         drop:(targetPath: string, fileName: string, fileData: Uint8Array)=>Promise<{ success: boolean; error?: string }>
+        dropFolder: (targetPath: string, sourcePath: string) => Promise<{ success: boolean; name?: string; path?: string; error?: string }>;
+        onReferencesUpdated: (callback: (filePaths: string[]) => void) => () => void;
       };
       searchFiles: (query: string) => Promise<SearchResult[]>;
       git: {
@@ -238,8 +241,15 @@ declare global {
       env: {
         load: () => Promise<any>;
         setActive: (envPath: string) => Promise<any>;
-        extendEnvs:(comment:string,variables:[{key:string,value:Record<string,string>}])=>Promise<void>
-        replaceVariables:(text:string)=>Promise<string>
+        extendEnvs: (comment: string, variables: [{ key: string; value: Record<string, string> }]) => Promise<void>;
+        replaceVariables: (text: string) => Promise<string>;
+        getKeys: () => Promise<string[]>;
+        getYamlTrees: (profile?: string) => Promise<{ public: Record<string, unknown>; private: Record<string, unknown> }>;
+        saveYamlTrees: (publicTree: Record<string, unknown>, privateTree: Record<string, unknown>, profile?: string) => Promise<void>;
+        getProfiles: () => Promise<string[]>;
+        setActiveProfile: (profile: string) => Promise<void>;
+        createProfile: (profile: string) => Promise<void>;
+        deleteProfile: (profile: string) => Promise<void>;
       };
       fileLink: {
         exists: (absolutePath: string) => Promise<boolean>;

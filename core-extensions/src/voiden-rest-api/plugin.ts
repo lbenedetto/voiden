@@ -13,9 +13,23 @@ import { createRequestHeadersNode } from './nodes/RequestHeadersNode';
 import { createResponseBodyNode } from './nodes/ResponseBodyNode';
 import manifest from './manifest.json';
 import React from 'react';
+import { createResponseDocNode } from './nodes/ResponseDocNode';
 import { CopyCurlButton } from './components/CopyCurlButton';
 
 type EditorTab = { title?: string; content?: string; tabId?: string };
+
+// Lazily cached store reference so the synchronous predicate can read unsaved content.
+let _editorStore: any = null;
+function getEditorStore() {
+  if (!_editorStore) {
+    // @ts-ignore - resolved at runtime in app context
+    (import(/* @vite-ignore */ '@/core/editors/voiden/VoidenEditor') as Promise<any>)
+      .then((m: any) => { _editorStore = m.useEditorStore; })
+      .catch(() => {});
+  }
+  return _editorStore;
+}
+
 const voidenRestApiPlugin = (context: PluginContext) => {
   // Create extension instance
   const extension = new VoidenRestApiExtension();
@@ -176,11 +190,12 @@ const voidenRestApiPlugin = (context: PluginContext) => {
       const ResponseHeadersNode = createResponseHeadersNode(NodeViewWrapper, CodeEditor);
       const RequestHeadersNode = createRequestHeadersNode(NodeViewWrapper, CodeEditor);
       const ResponseBodyNode = createResponseBodyNode(NodeViewWrapper, CodeEditor);
-
+      const ResponseDocNode = createResponseDocNode(NodeViewWrapper);
       context.registerVoidenExtension(ResponseStatusNode);
       context.registerVoidenExtension(ResponseHeadersNode);
       context.registerVoidenExtension(ResponseBodyNode);
       context.registerVoidenExtension(RequestHeadersNode);
+      context.registerVoidenExtension(ResponseDocNode);
 
       // Register linkable node types (for external file linking)
 
@@ -190,6 +205,7 @@ const voidenRestApiPlugin = (context: PluginContext) => {
         'rest-request',
         'method',
         'url',
+        'response-doc',
         'headers-table',
         'query-table',
         'path-table',
@@ -218,6 +234,7 @@ const voidenRestApiPlugin = (context: PluginContext) => {
         'path-table': 'Path Params',
         'rest-params': 'Path Params',
         'rest-file': 'File Upload',
+        'response-doc': 'Response',
         'response-body': 'Response Body',
         'response-headers': 'Response Headers',
         'request-headers': 'Request Headers',
@@ -230,28 +247,40 @@ const voidenRestApiPlugin = (context: PluginContext) => {
       context.registerEditorAction({
         id: "copy-curl-button",
         component: (props: any) =>
-          React.createElement(CopyCurlButton, { 
+          React.createElement(CopyCurlButton, {
             tab: props?.tab,
             context: context
           }),
         predicate: (tab) => {
-          // Show copy cURL button for .void files that contain a request block inside a ```void fenced block
           const name = tab?.title?.toLowerCase() || "";
           if (!name.endsWith(".void")) return false;
 
-          const content = tab?.content;
+          let content = tab?.content || "";
+          // If unsaved content exists, use it exclusively as the source of truth
+          const store = getEditorStore();
+          if (tab?.tabId && store) {
+            const unsaved = store.getState().unsaved[tab.tabId];
+            if (unsaved) {
+              try {
+                const doc = JSON.parse(unsaved);
+                return doc?.content?.some((node: any) =>
+                  node.type === 'api' || node.type === 'request'
+                ) ?? false;
+              } catch {
+                return false;
+              }
+            }
+          }
+
+          // No unsaved content — fall back to saved file content
           if (typeof content !== 'string' || content.trim().length === 0) return false;
 
           try {
-            const text = content;
-            // Find all ```void fenced blocks and check each for `type: request`
             const fenceRegex = /```\s*void([\s\S]*?)```/gi;
             let match;
-            while ((match = fenceRegex.exec(text)) !== null) {
-              const inner = match[1] || '';
-              if (/type:\s*request/i.test(inner)) return true;
+            while ((match = fenceRegex.exec(content)) !== null) {
+              if (/type:\s*request/i.test(match[1] || '')) return true;
             }
-
             return false;
           } catch {
             return false;

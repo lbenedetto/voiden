@@ -11,10 +11,12 @@ import SettingsScreen from "@/core/screens/SettingsScreen";
 import logo from "@/assets/logo-dark.png";
 import ChangeLogScreen from "@/core/screens/ChangeLogScreen";
 import { useCodeEditorStore } from "@/core/editors/code/CodeEditorStore";
+import { useEditorStore } from "@/core/editors/voiden/VoidenEditor";
 import { Settings, Menu } from "lucide-react";
 import { Kbd } from "@/core/components/ui/kbd";
 import { ErrorBoundary } from "@/core/components/ErrorBoundary";
 import { DiffViewer } from "@/core/git/components/DiffViewer";
+import { EnvironmentEditor } from "@/core/environment/components/EnvironmentEditor";
 
 // TypeScript interface for md-preview plugin helpers
 interface MdPreviewHelpers {
@@ -269,6 +271,11 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
   const editorActions = usePluginStore((state) => state.editorActions);
   const activeEditor = useCodeEditorStore((state) => state.activeEditor);
 
+  // Subscribe to unsaved Voiden editor content for the active tab so predicates
+  // are re-evaluated whenever the editor content changes (not just on file save).
+  const activeTabId = tabContent?.tabId;
+  useEditorStore((state) => activeTabId ? state.unsaved[activeTabId] : undefined);
+
   // Get md-preview helpers dynamically if plugin is loaded
   // IMPORTANT: Only call the hook if it exists to prevent crashes during plugin reload
   const mdPreviewHelpers = getMdPreviewHelpers();
@@ -463,6 +470,15 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
     return <SettingsContent />;
   }
 
+  if (tabContent.type === "environmentEditor") {
+    editorActions.forEach((action) => {
+      if (action && action.predicate) {
+        action.predicate({ title: '' });
+      }
+    });
+    return <EnvironmentEditor />;
+  }
+
   if (tabContent.type === "extensionDetails") {
     editorActions.forEach((action) => {
       if (action && action.predicate) {
@@ -495,7 +511,26 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
 export const PanelContent = ({ panelId }: { panelId: string }) => {
   // Force remount when plugin state changes to prevent stale hook references
   const isInitialized = usePluginStore((state) => state.isInitialized);
-  const { data: tabs } = useGetPanelTabs(panelId);
+  const { data: tabs, dataUpdatedAt } = useGetPanelTabs(panelId);
+
+  // Track re-clicks on the already-active tab so we can reset the ErrorBoundary.
+  // When useActivateTab fires for the same tab, panel:tabs refetches (dataUpdatedAt
+  // changes) while activeTabId stays the same — increment resetCounter to force reset.
+  const [resetCounter, setResetCounter] = useState(0);
+  const prevDataUpdatedAtRef = useRef(0);
+  const prevActiveTabIdRef = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (
+      dataUpdatedAt > prevDataUpdatedAtRef.current &&
+      prevActiveTabIdRef.current === tabs?.activeTabId &&
+      tabs?.activeTabId !== undefined
+    ) {
+      setResetCounter((c) => c + 1);
+    }
+    prevDataUpdatedAtRef.current = dataUpdatedAt;
+    prevActiveTabIdRef.current = tabs?.activeTabId;
+  }, [dataUpdatedAt, tabs?.activeTabId]);
 
   // Don't render content while plugins are reloading to prevent accessing stale references
   if (!isInitialized) {
@@ -507,7 +542,7 @@ export const PanelContent = ({ panelId }: { panelId: string }) => {
   }
 
   return (
-    <ErrorBoundary level="component" resetKey={tabs?.activeTabId} key={`panel-${panelId}-${isInitialized}`}>
+    <ErrorBoundary level="component" resetKey={`${tabs?.activeTabId}-${resetCounter}`} key={`panel-${panelId}-${isInitialized}`}>
       <PanelContentInner panelId={panelId} />
     </ErrorBoundary>
   );

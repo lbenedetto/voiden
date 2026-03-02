@@ -1,15 +1,32 @@
 import { cn } from "@/core/lib/utils";
-import * as Tooltip from "@radix-ui/react-tooltip";
 import { Command } from "cmdk";
 import { useEffect, useState } from "react";
-import { useEnvironments, useSetActiveEnvironment } from "@/core/environment/hooks";
-import { ChevronRight, FileText, Ban, Check } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEnvironments, useSetActiveEnvironment, useProfiles, useSetActiveProfile } from "@/core/environment/hooks";
+import { useAddPanelTab, useActivateTab, useGetPanelTabs } from "@/core/layout/hooks";
+import { ChevronRight, FileText, Ban, Check, Settings2, Layers } from "lucide-react";
 import { Kbd } from "@/core/components/ui/kbd";
+import { Tip } from "@/core/components/ui/Tip";
 
 export const EnvSelector = () => {
+  const queryClient = useQueryClient();
   const { data: envs } = useEnvironments();
+  const { data: profiles } = useProfiles();
   const { mutate: setActiveEnv } = useSetActiveEnvironment();
+  const { mutate: setActiveProfile } = useSetActiveProfile();
+  const { mutate: addPanelTab } = useAddPanelTab();
+  const { mutate: activateTab } = useActivateTab();
+  const { data: mainTabs } = useGetPanelTabs("main");
   const [open, setOpen] = useState(false);
+  const hasMultipleProfiles = profiles && profiles.length > 1;
+  const activeProfile = envs?.activeProfile || "default";
+
+  useEffect(() => {
+    if (open) {
+      queryClient.invalidateQueries({ queryKey: ["environments"] });
+      queryClient.invalidateQueries({ queryKey: ["env-profiles"] });
+    }
+  }, [open, queryClient]);
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -43,6 +60,19 @@ export const EnvSelector = () => {
     setActiveEnv(envPath);
     setOpen(false);
   };
+
+  const handleOpenEditor = () => {
+    setOpen(false);
+    const existing = mainTabs?.tabs?.find((t: { type: string; id: string }) => t.type === "environmentEditor");
+    if (existing) {
+      activateTab({ panelId: "main", tabId: existing.id });
+      return;
+    }
+    addPanelTab({
+      panelId: "main",
+      tab: { id: crypto.randomUUID(), type: "environmentEditor", title: "Environments", source: null },
+    });
+  };
   const [search, setSearch] = useState("");
 
   if (!envs) return null;
@@ -51,26 +81,21 @@ export const EnvSelector = () => {
       <div className="px-1">
         <ChevronRight size={14} className="text-comment" />
       </div>
-      <Tooltip.Root>
-        <Tooltip.Trigger asChild>
-          <button
-            className={cn("text-sm h-full px-2 flex items-center gap-2 hover:bg-active no-drag", !envs?.activeEnv && "text-comment")}
-            onClick={() => setOpen(true)}
-          >
-            <span>{envs?.activeEnv ? envs?.activeEnv.replace(/\\/g, "/").split("/").pop() : "No environment"}</span>
-          </button>
-        </Tooltip.Trigger>
-        <Tooltip.Content
-          align="start"
-          sideOffset={4}
-          alignOffset={4}
-          side="top"
-          className="border bg-panel border-border p-1 text-sm z-20 text-comment flex items-center gap-2"
+      <Tip label={<span className="flex items-center gap-2"><span>Select an environment</span><Kbd keys="⌥⌘E" size="sm" /></span>}>
+        <button
+          className={cn("text-sm h-full px-2 flex items-center gap-2 hover:bg-active no-drag", !envs?.activeEnv && "text-comment")}
+          onClick={() => setOpen(true)}
         >
-          <span>Select an environment</span>
-          <Kbd keys="⌥⌘E" size="sm" />
-        </Tooltip.Content>
-      </Tooltip.Root>
+          <span>
+            {envs?.activeEnv
+              ? (envs.displayNames?.[envs.activeEnv] || envs.activeEnv.replace(/\\/g, "/").split("/").pop())
+              : "No environment"}
+            {hasMultipleProfiles && activeProfile !== "default" && (
+              <span className="text-comment ml-1">({activeProfile})</span>
+            )}
+          </span>
+        </button>
+      </Tip>
       {
         open && (
           <div
@@ -109,7 +134,40 @@ export const EnvSelector = () => {
                 <Command.List className="max-h-[400px] overflow-y-auto p-2">
                   <Command.Empty className="py-6 text-center text-comment text-sm">No environments found</Command.Empty>
 
-                  <Command.Group>
+                  {hasMultipleProfiles && (
+                    <Command.Group heading={
+                      <div className="flex items-center gap-1.5 px-1 pb-1 text-xs font-medium uppercase tracking-wider text-comment">
+                        <Layers size={12} />
+                        Profile
+                      </div>
+                    }>
+                      {profiles.map((profile) => (
+                        <Command.Item
+                          key={`profile-${profile}`}
+                          value={`profile:${profile}`}
+                          keywords={["profile", profile]}
+                          className="cursor-pointer px-3 py-2 rounded-md mb-1 text-text data-[selected=true]:bg-active hover:bg-active flex items-center gap-3 outline-none"
+                          onSelect={() => {
+                            setActiveProfile(profile);
+                          }}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium">{profile}</div>
+                          </div>
+                          {profile === activeProfile && (
+                            <Check size={16} className="flex-shrink-0" style={{ color: 'var(--icon-success)' }} />
+                          )}
+                        </Command.Item>
+                      ))}
+                    </Command.Group>
+                  )}
+
+                  <Command.Group heading={hasMultipleProfiles ?
+                    <div className="flex items-center gap-1.5 px-1 pb-1 text-xs font-medium uppercase tracking-wider text-comment">
+                      <FileText size={12} />
+                      Environment
+                    </div> : undefined
+                  }>
                     {/* Option to clear environment */}
                     <Command.Item
                       value="none"
@@ -129,25 +187,31 @@ export const EnvSelector = () => {
 
                     {/* Render available environments */}
                     {envs?.data &&
-                      Object.entries(envs.data).filter(([fileName])=>{
-                       const normalizedPath = fileName.replace(/\\/g, "/");
-                       const projectName = normalizedPath.split("/").pop()||normalizedPath;
-                       return projectName.toLowerCase().includes(search.toLowerCase());
-                    }).map(([fileName]) => {
-                        const displayName = fileName.replace(/\\/g, "/").split("/").pop() || fileName;
+                      Object.entries(envs.data).map(([fileName]) => {
+                        const customName = envs.displayNames?.[fileName];
+                        const fallbackName = fileName.replace(/\\/g, "/").split("/").pop() || fileName;
+                        const displayName = customName || fallbackName;
+                        return { fileName, displayName, fallbackName, hasCustomName: !!customName };
+                      }).filter(({ displayName, fallbackName }) =>
+                        displayName.toLowerCase().includes(search.toLowerCase()) ||
+                        fallbackName.toLowerCase().includes(search.toLowerCase())
+                      ).map(({ fileName, displayName, fallbackName, hasCustomName }) => {
                         const isActive = fileName === envs.activeEnv;
-                        
+
                         return (
                           <Command.Item
                             key={fileName}
                             value={fileName}
+                            keywords={hasCustomName ? [fallbackName, displayName] : undefined}
                             className="cursor-pointer px-3 py-2.5 rounded-md mb-1 text-text data-[selected=true]:bg-active hover:bg-active flex items-center gap-3 outline-none"
                             onSelect={() => handleEnvSelect(fileName)}
                           >
                             <FileText size={16} className="flex-shrink-0" style={{ color: 'var(--icon-primary)' }} />
                             <div className="flex-1 min-w-0">
                               <div className="text-sm font-medium truncate">{displayName}</div>
-                              <div className="text-xs text-comment truncate">{fileName}</div>
+                              {hasCustomName && (
+                                <div className="text-xs text-comment truncate">{fileName}</div>
+                              )}
                             </div>
                             {isActive && (
                               <Check size={16} className="flex-shrink-0" style={{ color: 'var(--icon-success)' }} />
@@ -161,7 +225,13 @@ export const EnvSelector = () => {
                 {/* Footer with keyboard hint */}
                 <div className="px-4 py-2 border-t border-border bg-editor/50">
                   <div className="flex items-center justify-between text-comment">
-                    <span className="text-sm">Use ↑↓ to navigate</span>
+                    <button
+                      onClick={handleOpenEditor}
+                      className="flex items-center gap-1.5 text-sm hover:text-text transition-colors"
+                    >
+                      <Settings2 size={14} />
+                      Edit Environments & Profiles
+                    </button>
                     <span className="flex items-center gap-1.5">
                       <Kbd keys="⌥⌘E" size="sm" />
                       <span className="text-sm">to toggle</span>

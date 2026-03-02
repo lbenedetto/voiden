@@ -623,6 +623,15 @@ function sanitizeDoc(node: any): any {
           const fallbackContent = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: content }] }] };
           editor.commands.setContent(fallbackContent, false);
         }
+
+        // After setContent, ProseMirror leaves the selection at position 0 (before
+        // the first block node), which visually selects the first character.
+        // Explicitly collapse the cursor to the start of the document.
+        requestAnimationFrame(() => {
+          if (!editor.isDestroyed) {
+            editor.commands.setTextSelection(1);
+          }
+        });
       } catch (e) {
         // Set a safe fallback content instead of destroying the editor
         const fallbackContent = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: content }] }] };
@@ -652,7 +661,7 @@ function sanitizeDoc(node: any): any {
 
   const editor = useEditor(
     {
-      autofocus: content.length === 0,
+      autofocus: content.length === 0 ? 'end' : false,
       content: initialContent,
       editorProps: {
         attributes: {
@@ -696,6 +705,11 @@ function sanitizeDoc(node: any): any {
 
     const reloadFromFile = async () => {
       try {
+        // If the user has unsaved changes, skip the external reload to preserve their work.
+        // This prevents git:changed events (triggered by saveRuntimeVariables writing
+        // .voiden/.process.env.json / .gitignore) from wiping the editor mid-session.
+        if (useEditorStore.getState().unsaved[tabId]) return;
+
         // Read fresh content from disk
         const freshContent = await window.electron?.files.read(source);
         if (!freshContent) {

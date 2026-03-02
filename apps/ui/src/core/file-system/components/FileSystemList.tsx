@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useContext } from "react";
+import * as Tooltip from "@radix-ui/react-tooltip";
 // Debounce hook
 function useDebounce<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = useState<T>(value);
@@ -10,7 +11,7 @@ function useDebounce<T>(value: T, delay: number): T {
 }
 import { useQuery } from "@tanstack/react-query";
 import { NodeRendererProps, Tree, NodeApi, TreeApi } from "react-arborist";
-import * as Tooltip from "@radix-ui/react-tooltip";
+import { Tip } from "@/core/components/ui/Tip";
 import {
   Infinity,
   FileText,
@@ -22,8 +23,8 @@ import {
   ArrowBigDown,
   Info,
   ChevronRight,
-  ChevronsDown,
-  ChevronsUp,
+  ChevronsDownUp,
+  ChevronsUpDown,
   File,
   Folder,
   FolderOpen,
@@ -38,6 +39,7 @@ import { cn } from "@/core/lib/utils";
 import { FileTree } from "@/types";
 import type { SearchResult } from "@/types";
 import { useFileTree, useMove } from "@/core/file-system/hooks";
+import { toast } from "@/core/components/ui/sonner";
 import useResizeObserver from "use-resize-observer";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useActivateTab, useBottomPanel } from "@/core/layout/hooks";
@@ -148,6 +150,7 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode }: 
   const [error, setError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [dragOverTimer, setDragOverTimer] = useState<NodeJS.Timeout | null>(null);
+  const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
   const { dragOverParentId, setDragOverParentId } = useContext(DragOverContext);
   const queryClient = useQueryClient();
   const setIsRenaming = useFocusStore((state) => state.setIsRenaming);
@@ -387,7 +390,7 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode }: 
     renameMutation.mutate(newName);
   };
 
-  // Handle file drop from external sources (Finder, File Explorer, etc.)
+  // Handle file/folder drop from external sources (Finder, File Explorer, etc.)
   const handleDrop = async (e: React.DragEvent) => {
     setIsDragOver(false);
     setDragOverParentId(null);
@@ -403,30 +406,58 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode }: 
     e.preventDefault();
     e.stopPropagation();
 
-    const files = Array.from(e.dataTransfer.files);
+    // Determine target folder: if dropped on a file, use its parent folder
+    let targetFolder = node;
+    let targetPath = node.data.path;
 
-    if (files.length > 0) {
-      // Determine target folder: if dropped on a file, use its parent folder
-      let targetFolder = node;
-      let targetPath = node.data.path;
+    if (node.data.type === "file") {
+      if (node.parent) {
+        targetFolder = node.parent;
+        targetPath = node.parent.data.path;
+      }
+    }
 
-      if (node.data.type === "file") {
-        // VS Code behavior: drop on file uploads to parent folder
-        if (node.parent) {
-          targetFolder = node.parent;
-          targetPath = node.parent.data.path;
+    // Separate files and folders using the DataTransfer items API
+    const regularFiles: File[] = [];
+    const folderPaths: string[] = [];
+
+    for (const item of Array.from(e.dataTransfer.items)) {
+      const entry = item.webkitGetAsEntry?.();
+      if (entry?.isDirectory) {
+        // In Electron, getAsFile() on a directory item returns a File with a .path property
+        const file = item.getAsFile() as (File & { path?: string }) | null;
+        if (file?.path) {
+          folderPaths.push(file.path);
+        }
+      } else {
+        const file = item.getAsFile();
+        if (file) regularFiles.push(file);
+      }
+    }
+
+    try {
+      if (regularFiles.length > 0) {
+        await dropFilesMutation.mutateAsync({ files: regularFiles, targetPath });
+      }
+
+      for (const folderPath of folderPaths) {
+        const result = await window.electron?.files.dropFolder(targetPath, folderPath);
+        if (result && !result.success) {
+          throw new Error(result.error ?? `Failed to drop folder "${folderPath}"`);
         }
       }
-      try {
-        await dropFilesMutation.mutateAsync({ files, targetPath });
 
-        // Open the folder if it was closed
-        if (targetFolder.data.type === "folder" && !targetFolder.isOpen) {
-          targetFolder.open();
-        }
-      } catch (error) {
-        console.error("Failed to drop files:", error);
+      if (folderPaths.length > 0) {
+        queryClient.invalidateQueries({ queryKey: ["files:tree"] });
+        queryClient.invalidateQueries({ queryKey: ["env"] });
       }
+
+      // Open the target folder if it was closed
+      if (targetFolder.data.type === "folder" && !targetFolder.isOpen) {
+        targetFolder.open();
+      }
+    } catch (error) {
+      console.error("Failed to drop items:", error);
     }
   };
   const isSiblingHighlight = dragOverParentId === node.parent?.id;
@@ -579,9 +610,22 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode }: 
     }
   };
 
+  useEffect(() => {
+    if (!isContextMenuOpen) return;
+    const reset = () => setIsContextMenuOpen(false);
+    // mousedown fires before contextmenu, so right-clicking elsewhere resets the
+    // previous node first. Unlike 'click', mousedown also fires after Electron's
+    // native context menu is dismissed by clicking back in the window.
+    window.addEventListener("mousedown", reset, { once: true });
+    return () => {
+      window.removeEventListener("mousedown", reset);
+    };
+  }, [isContextMenuOpen]);
+
   const handleContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
+    setIsContextMenuOpen(true);
 
     if (!node.isSelected) {
       node.select();
@@ -639,9 +683,11 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode }: 
       style={style}
       ref={dragHandle}
       className={cn(
-        "group h-6 transition-colors",
-        !isDragOver && activeFile?.source !== node.data.path && 'hover:bg-hover',
+        "group h-6 overflow-hidden transition-colors border border-transparent",
+        !isDragOver && activeFile?.source !== node.data.path && !node.isSelected && 'hover:bg-hover',
+        isContextMenuOpen && "border-active",
         activeFile?.source === node.data.path && !isDragOver && "bg-active",
+        node.isSelected && node.tree.selectedNodes.length > 1 && activeFile?.source !== node.data.path && !isDragOver && "bg-accent/20",
         node.isFocused && !isDragOver && "ring-0",
         (isDragOver || isInternalDropTargetFolder) && 'bg-accent/30 border-l-2 border-accent',
         // Highlight all siblings when any sibling is being dragged over
@@ -659,15 +705,17 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode }: 
         ))}
       </div>
       <div className="pl-2 relative flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className={`flex items-center ${node.data.type === "folder" ? "gap-1" : "gap-2"} w-full`}>
           {node.data.type === "folder" && (
-            <>
+            <div className="w-30 flex items-center">
               <ChevronRight size={14} className={`transition-transform ${node.isOpen ? "rotate-90" : ""}`} />
               {node.isOpen && <FolderOpen size={14} />}
               {!node.isOpen && <Folder size={14} />}
-            </>
+            </div>
           )}
-          {node.data.type !== "folder" && getFileIcon(node.data.name, node.data.path)}
+          <div className="w-30">
+            {node.data.type !== "folder" && getFileIcon(node.data.name, node.data.path)}
+          </div>
           {node.isEditing ? (
           <RenameInput node={node} error={error} setError={setError} onSubmit={onSubmit} setIsRenaming={setIsRenaming} />
         ) : (
@@ -692,59 +740,31 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode }: 
           </span>
         )}
         </div>
-        {
+         {
           node.data.type === "folder" && (
             <div className="flex items-center px-2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity">
-              <Tooltip.Root>
-                <Tooltip.Trigger asChild>
+              <Tip label="Collapse all" side="bottom" align="end">
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       collapseAllFromFolder(node);
                     }}
                     className="p-0.5 rounded hover:bg-hover ml-1"
-                    title="Collapse all inside this folder"
                   >
-                    <ChevronsUp size={12} />
+                    <ChevronsDownUp size={12} />
                   </button>
-                </Tooltip.Trigger>
-                <Tooltip.Content
-                  align="end"
-                  sideOffset={4}
-                  alignOffset={4}
-                  side="bottom"
-                  avoidCollisions
-                  collisionPadding={8}
-                  className="border text-comment bg-panel border-border p-1 text-sm z-10"
-                >
-                  Collapse all
-                </Tooltip.Content>
-              </Tooltip.Root>
-              <Tooltip.Root>
-                <Tooltip.Trigger asChild>
+              </Tip>
+              <Tip label="Expand all" side="bottom" align="end">
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       expandAllFromFolder(node);
                     }}
                     className="p-0.5 rounded hover:bg-hover"
-                    title="Expand all inside this folder"
                   >
-                    <ChevronsDown size={12} />
+                    <ChevronsUpDown size={12} />
                   </button>
-                </Tooltip.Trigger>
-                <Tooltip.Content
-                  align="end"
-                  sideOffset={4}
-                  alignOffset={4}
-                  side="bottom"
-                  avoidCollisions
-                  collisionPadding={8}
-                  className="border text-comment bg-panel border-border p-1 text-sm z-10"
-                >
-                  Expand all
-                </Tooltip.Content>
-              </Tooltip.Root>
+              </Tip>
             </div>
           )
         }
@@ -784,6 +804,29 @@ export const FileSystemList = () => {
   const { mutateAsync: setActiveProject } = useSetActiveProject();
   const { mutateAsync: activateTab } = useActivateTab();
   const treeRef = useRef<TreeApi<ExtendedFileTree>>(null);
+
+  // Open file / toggle folder on Enter key (react-arborist fires onActivate for Enter)
+  const handleActivate = async (node: NodeApi<ExtendedFileTree>) => {
+    if (node.data.type === "file") {
+      const newTab = {
+        id: crypto.randomUUID(),
+        type: "document" as const,
+        title: node.data.name,
+        source: node.data.path,
+        directory: null,
+      };
+      try {
+        const { tabId = null } = (await window.electron?.state.addPanelTab("main", newTab)) ?? {};
+        if (tabId) {
+          activateTab({ panelId: "main", tabId });
+        }
+      } catch {
+        // ignore
+      }
+    } else {
+      node.toggle();
+    }
+  };
   const dndRootElement = useRef<HTMLDivElement>(null);
   const pendingFileKindRef = useRef<"void" | null>(null);
   const queryClient = useQueryClient();
@@ -942,10 +985,55 @@ export const FileSystemList = () => {
     const isSameDirectory = draggedItems.some((node) => node?.data.parent === parentId);
     if (isSameDirectory) return;
     const result = await move({ dragIds, parentId });
-    if (!result?.success) {
-      // console.error(result?.error);
+    if (!result) return;
+
+    if (result.error) {
+      toast.error("Move failed", { description: result.error });
+      return;
+    }
+
+    for (const conflict of result.conflicts ?? []) {
+      toast.warning(`"${conflict.fileName}" already exists`, {
+        description: "A file with this name already exists in the target folder.",
+        action: {
+          label: "Replace",
+          onClick: async () => {
+            const replaceResult = await window.electron?.files.moveForce([conflict]);
+            if (replaceResult?.success) {
+              queryClient.invalidateQueries({ queryKey: ["files:tree"] });
+            } else {
+              toast.error("Replace failed", { description: replaceResult?.error ?? "Unknown error" });
+            }
+          },
+        },
+      });
     }
   };
+
+  // When linkedBlock / fileLink references are updated after a file move, reload any
+  // open tabs whose source file was rewritten so editors pick up the new paths.
+  useEffect(() => {
+    const off = window.electron?.files.onReferencesUpdated((updatedPaths: string[]) => {
+      // Clear cached block content (linkedBlock originalFile paths may have changed)
+      queryClient.removeQueries({ queryKey: ["voiden-wrapper:blockContent"] });
+      // Clear file-existence cache (fileLink filePath paths may have changed)
+      queryClient.removeQueries({ queryKey: ["file:exists"] });
+
+      // Reload tabs whose source file was rewritten
+      for (const panelId of ["main", "right"]) {
+        const panelTabs = queryClient.getQueryData<{ tabs: { id: string; source: string | null }[]; activeTabId: string }>(["panel:tabs", panelId]);
+        for (const tab of panelTabs?.tabs ?? []) {
+          if (tab.source && updatedPaths.includes(tab.source)) {
+            queryClient.removeQueries({ queryKey: ["tab:content", panelId, tab.id] });
+          }
+        }
+      }
+
+      // Trigger ErrorBoundary reset for any panel showing the stale content
+      queryClient.invalidateQueries({ queryKey: ["panel:tabs"] });
+    });
+    return () => off?.();
+  }, [queryClient]);
 
   // Listen for the "file:create" event.
   useElectronEvent<{ path: string; type: string }>("file:create", async (eventData) => {
@@ -1178,64 +1266,28 @@ export const FileSystemList = () => {
               onMouseDown={(e) => e.stopPropagation()}
               autoFocus
             />
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <button onClick={() => setMatchCase((c) => !c)} className={matchCase ? "bg-active" : ""}>
-                  <Type size={16} />
-                </button>
-              </Tooltip.Trigger>
+            <Tip label="Match case" side="bottom">
+              <button onClick={() => setMatchCase((c) => !c)} className={matchCase ? "bg-active" : ""}>
+                <Type size={16} />
+              </button>
+            </Tip>
 
-              <Tooltip.Content
-                align="start"
-                sideOffset={4}
-                alignOffset={4}
-                side="bottom"
-                className="border text-comment bg-panel border-border p-1 text-sm z-10"
+            <Tip label="Match whole word" side="bottom">
+              <button onClick={() => setMatchWholeWord((w) => !w)} className={matchWholeWord ? "bg-active" : ""}>
+                <Hash size={16} />
+              </button>
+            </Tip>
+            <Tip label="Close search" side="bottom">
+              <button
+                onClick={() => {
+                  setStoreIsSearching(false);
+                  setRawQuery("");
+                }}
+                className="p-1 rounded hover:bg-active"
               >
-                Match case
-              </Tooltip.Content>
-            </Tooltip.Root>
-
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <button onClick={() => setMatchWholeWord((w) => !w)} className={matchWholeWord ? "bg-active" : ""}>
-                  <Hash size={16} />
-                </button>
-              </Tooltip.Trigger>
-
-              <Tooltip.Content
-                align="start"
-                sideOffset={4}
-                alignOffset={4}
-                side="bottom"
-                className="border text-comment bg-panel border-border p-1 text-sm z-10"
-              >
-                Match whole word
-              </Tooltip.Content>
-            </Tooltip.Root>
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <button
-                  onClick={() => {
-                    setStoreIsSearching(false);
-                    setRawQuery("");
-                  }}
-                  className="p-1 rounded hover:bg-active"
-                >
-                  <X size={16} />
-                </button>
-              </Tooltip.Trigger>
-
-              <Tooltip.Content
-                align="start"
-                sideOffset={4}
-                alignOffset={4}
-                side="bottom"
-                className="border text-comment bg-panel border-border p-1 text-sm z-10"
-              >
-                Close search
-              </Tooltip.Content>
-            </Tooltip.Root>
+                <X size={16} />
+              </button>
+            </Tip>
           </>
         )}
         {storeIsSearching && isSearching && <Loader size={14} className="animate-spin" />}
@@ -1287,7 +1339,16 @@ export const FileSystemList = () => {
       ) : (
         <div ref={ref} className="flex-1 overflow-hidden">
           <DragOverContext.Provider value={{ dragOverParentId, setDragOverParentId }}>
-            <div ref={dndRootElement}>
+            <div
+              ref={dndRootElement}
+              onKeyDown={async (e) => {
+                if (e.key !== "Enter") return;
+                const focused = treeRef.current?.focusedNode ?? treeRef.current?.selectedNodes?.[0];
+                if (!focused || focused.data.isTemporary) return;
+                e.preventDefault();
+                await handleActivate(focused);
+              }}
+            >
               {treeData && (
                 <Tree
                   dndRootElement={dndRootElement.current}
