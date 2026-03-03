@@ -33,6 +33,7 @@ import { Table, TableBody, TableRow, TableCell } from "@/core/components/ui/tabl
 import { NodeViewWrapper } from "@tiptap/react";
 import { useSendRestRequest } from "@/core/request-engine";
 import { RequestBlockHeader } from "@/core/editors/voiden/nodes/RequestBlockHeader";
+import { useParentResponseDoc } from "@/core/extensions/hooks/useParentResponseDoc";
 import { toast } from "sonner";
 
 interface PluginError {
@@ -466,6 +467,7 @@ export const createPlugin = (pluginModule: (context: PluginContext) => Plugin, e
       },
       hooks: {
         useSendRestRequest,
+        useParentResponseDoc,
       },
       showToast: (message: string, type?: 'info' | 'success' | 'warning' | 'error') => {
         if (type) {
