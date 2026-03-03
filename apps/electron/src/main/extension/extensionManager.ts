@@ -20,8 +20,29 @@ export class ExtensionManager {
     try {
       const data = await fs.readFile(path.join(communityDir, "installed.json"), "utf8");
       const installed: ExtensionData[] = JSON.parse(data);
+
+      // Enrich each installed extension with data from its on-disk manifest
+      const enriched = await Promise.all(
+        installed.map(async (ext) => {
+          if (!ext.installedPath) return ext;
+          try {
+            const manifestRaw = await fs.readFile(path.join(ext.installedPath, "manifest.json"), "utf8");
+            const manifest = JSON.parse(manifestRaw);
+            return {
+              ...ext,
+              readme: manifest.readme || ext.readme || "",
+              capabilities: manifest.capabilities || ext.capabilities,
+              features: manifest.features || ext.features,
+              dependencies: manifest.dependencies || ext.dependencies,
+            };
+          } catch {
+            return ext;
+          }
+        }),
+      );
+
       // merge with core extensions in centralized appState
-      this.store.extensions = [...this.store.extensions.filter((ext) => ext.type === "core"), ...installed];
+      this.store.extensions = [...this.store.extensions.filter((ext) => ext.type === "core"), ...enriched];
     } catch (e) {
       // no installed community ext found, so only keep core extensions in appState
       this.store.extensions = this.store.extensions.filter((ext) => ext.type === "core");
@@ -88,17 +109,33 @@ export class ExtensionManager {
     await fs.writeFile(path.join(installPath, "manifest.json"), manifest, "utf8");
     await fs.writeFile(path.join(installPath, "main.js"), main, "utf8");
 
-    // update extension info in centralized appState
-    extension.installedPath = installPath;
-    extension.enabled = true;
-    const index = this.store.extensions.findIndex((ext) => ext.id === extension.id);
+    // Parse the downloaded manifest to extract rich metadata
+    let manifestData: any = {};
+    try {
+      manifestData = JSON.parse(manifest);
+    } catch {
+      // If manifest parsing fails, continue with the sparse registry data
+    }
+
+    // Build complete extension data from the manifest
+    const installed: ExtensionData = {
+      ...extension,
+      installedPath: installPath,
+      enabled: true,
+      readme: manifestData.readme || extension.readme || "",
+      capabilities: manifestData.capabilities || extension.capabilities,
+      features: manifestData.features || extension.features,
+      dependencies: manifestData.dependencies || extension.dependencies,
+    };
+
+    const index = this.store.extensions.findIndex((ext) => ext.id === installed.id);
     if (index > -1) {
-      this.store.extensions[index] = extension;
+      this.store.extensions[index] = installed;
     } else {
-      this.store.extensions.push(extension);
+      this.store.extensions.push(installed);
     }
     await this.saveInstalledCommunityExtensions();
-    return extension;
+    return installed;
   }
 
   async uninstallCommunityExtension(extensionId: string): Promise<void> {

@@ -2,7 +2,7 @@ import fs from "fs/promises";
 import { AppSettings, AppState, ExtensionData, PanelElement, SidebarTab } from "src/shared/types";
 import { Tab } from "src/shared/types";
 import { ExtensionManager } from "./extension/extensionManager";
-import { fetchReadme, getRemoteExtensions } from "./extension/extensionFetcher";
+import { getRemoteExtensions } from "./extension/extensionFetcher";
 import { BrowserWindow, dialog, ipcMain, IpcMainInvokeEvent } from "electron";
 import { loadState, saveState, loadSettings, getDefaultLayout, saveAutosaveFile, loadAutosaveFile, deleteAutosaveFile, cleanupAutosaveFiles } from "./persistState";
 import { renameFileOrDirectory, findVoidenProjects } from "./fileSystem";
@@ -598,19 +598,8 @@ export const ipcStateHandlers = () => {
           throw new Error(`Extension with id ${tab.meta.extensionId} not found`);
         }
 
-        let content = "";
-        if (extension.repo) {
-          // Construct URL using extension.repo, e.g. "edymusajev/catalog"
-          const url = `https://raw.githubusercontent.com/${extension.repo}/refs/heads/main/README.md`;
-          try {
-            content = await fetchReadme(url);
-          } catch (error) {
-            content = `Error fetching README: ${error}`;
-          }
-        } else {
-          // For core extensions, fall back to using their built-in readme if available.
-          content = extension.type === "core" && extension.readme ? extension.readme : "";
-        }
+        // Use the readme field from the manifest (shipped with the release)
+        const content = extension.readme || "";
 
         return {
           type: "extensionDetails",
