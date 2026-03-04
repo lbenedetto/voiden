@@ -17,6 +17,7 @@ export const getOAuth2TableRows = (grantType: string): string[][] => {
         ["client_secret", ""],
         ["scope", ""],
         ["callback_url", "http://localhost:9090/callback"],
+        ["state", ""],
       ];
     case "implicit":
       return [
@@ -24,6 +25,7 @@ export const getOAuth2TableRows = (grantType: string): string[][] => {
         ["client_id", ""],
         ["scope", ""],
         ["callback_url", "http://localhost:9090/callback"],
+        ["state", ""],
       ];
     case "password":
       return [

@@ -115,7 +115,7 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
               const cells: any[] = [];
               row.content.forEach((cell: any) => cells.push(cell));
               if (cells.length >= 2) {
-                const key = cells[0].textContent.trim();
+                const key = cells[0].textContent.trim().toLowerCase();
                 const val = cells[1].textContent.trim();
                 if (key) values[key] = val;
               }
@@ -276,6 +276,15 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
             vars[`${prefix}_expires_at`] = expAt;
             setExpiresAt(expAt);
           }
+          // Save all extra fields from the raw response (id_token, custom claims, etc.)
+          const knownKeys = new Set(["access_token", "token_type", "expires_in", "refresh_token", "scope"]);
+          if (tokenResponse.raw) {
+            for (const [key, value] of Object.entries(tokenResponse.raw)) {
+              if (!knownKeys.has(key) && value != null && value !== "") {
+                vars[`${prefix}_${key}`] = typeof value === "object" ? JSON.stringify(value) : value;
+              }
+            }
+          }
           if (oauth2Config.autoRefresh) {
             const tableValues = getTableValues();
             vars[`${prefix}_refresh_config`] = JSON.stringify({
@@ -321,7 +330,7 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
             if (!tableValues.client_id) throw new Error("Client ID is required");
             const codeVerifier = generateCodeVerifier();
             const codeChallenge = await generateCodeChallenge(codeVerifier);
-            const state = generateState();
+            const state = tableValues.state || generateState();
             result = await (window as any).electron!.oauth2!.startAuthCodeFlow({
               authUrl: tableValues.auth_url || "",
               tokenUrl: tableValues.token_url || "",
@@ -341,7 +350,7 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
           case "implicit": {
             if (!tableValues.auth_url) throw new Error("Auth URL is required");
             if (!tableValues.client_id) throw new Error("Client ID is required");
-            const state = generateState();
+            const state = tableValues.state || generateState();
             result = await (window as any).electron!.oauth2!.startImplicitFlow({
               authUrl: tableValues.auth_url || "",
               clientId: tableValues.client_id || "",

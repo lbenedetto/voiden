@@ -91,6 +91,15 @@ export const OAuth2TokenDisplay: React.FC<OAuth2TokenDisplayProps> = ({
           {expiresLabel && <TokenRow label="expires_in" value={expiresLabel} />}
           {token.refreshToken && <TokenRow label="refresh_token" value={token.refreshToken} />}
           {token.scope && <TokenRow label="scope" value={token.scope} />}
+          {/* Extra fields from raw response (id_token, custom claims, etc.) */}
+          {token.raw && (() => {
+            const known = new Set(["access_token", "token_type", "expires_in", "refresh_token", "scope"]);
+            return Object.entries(token.raw)
+              .filter(([k, v]) => !known.has(k) && v != null && v !== "")
+              .map(([k, v]) => (
+                <TokenRow key={k} label={k} value={typeof v === "object" ? JSON.stringify(v) : String(v)} />
+              ));
+          })()}
         </div>
       )}
     </div>
