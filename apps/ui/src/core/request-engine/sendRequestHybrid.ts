@@ -180,13 +180,18 @@ async function convertToRestApiRequestState(data: Request): Promise<RestApiReque
       enabled: p.enabled,
     }));
 
-  // Add auth query param if present (for API Key in query)
-  if (parameters && !parameters.startsWith('?')) {
-    const authQueryMatch = parameters.match(/([^=]+)=([^&]*)/);
-    if (authQueryMatch && data.auth?.type === 'api-key') {
+  // Add auth query params if present
+  if (data.auth && data.auth.enabled && data.auth.config) {
+    if (data.auth.type === 'api-key' && data.auth.config.in === 'query' && data.auth.config.key) {
       queryParamsArray.push({
-        key: authQueryMatch[1],
-        value: authQueryMatch[2],
+        key: data.auth.config.key,
+        value: data.auth.config.value || '',
+        enabled: true,
+      });
+    } else if (data.auth.type === 'oauth2' && data.auth.config.addTokenTo === 'query' && data.auth.config.accessToken) {
+      queryParamsArray.push({
+        key: 'access_token',
+        value: data.auth.config.accessToken,
         enabled: true,
       });
     }

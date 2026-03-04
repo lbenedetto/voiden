@@ -96,14 +96,28 @@ export default function createAdvancedAuthPlugin(context: PluginContext) {
                 }
                 await (window as any).electron?.variables?.writeVariables(JSON.stringify(updated, null, 2));
 
-                // Patch the Authorization header in the current requestState directly.
+                // Patch the current requestState directly.
                 // convertToRestApiRequestState() already resolved the old expired token
-                // into the header before this hook ran, so we must overwrite it here
-                // for the current request to use the new token.
+                // before this hook ran, so we must overwrite it here for the current
+                // request to use the new token.
                 const tokenType = result.tokenType || 'Bearer';
                 const headerPrefix = auth.config?.headerPrefix || tokenType;
                 const addTokenTo = auth.config?.addTokenTo || 'header';
-                if (addTokenTo !== 'query' && ctx.requestState?.headers) {
+                if (addTokenTo === 'query') {
+                  // Patch query param with new token
+                  if (ctx.requestState?.queryParams) {
+                    const params = ctx.requestState.queryParams as Array<{ key: string; value: string; enabled?: boolean }>;
+                    const tokenIdx = params.findIndex(
+                      (p: any) => p.key === 'access_token',
+                    );
+                    if (tokenIdx >= 0) {
+                      params[tokenIdx].value = encodeURIComponent(result.accessToken);
+                    } else {
+                      params.push({ key: 'access_token', value: encodeURIComponent(result.accessToken), enabled: true });
+                    }
+                  }
+                } else if (ctx.requestState?.headers) {
+                  // Patch Authorization header with new token
                   const headers = ctx.requestState.headers as Array<{ key: string; value: string; enabled?: boolean }>;
                   const authIdx = headers.findIndex(
                     (h: any) => h.key?.toLowerCase() === 'authorization',
