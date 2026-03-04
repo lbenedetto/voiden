@@ -18,10 +18,10 @@ export const OAuth2GetTokenButton: React.FC<OAuth2GetTokenButtonProps> = ({
 }) => {
   if (loading) {
     return (
-      <div className="flex items-center gap-2 mt-2">
+      <div className="flex items-center gap-2 py-1">
         <button
           onClick={onCancel}
-          className="px-3 py-1 text-xs font-mono rounded bg-red-500/20 hover:bg-red-500/30 text-red-400 hover:text-red-300 border border-red-500/30 transition-colors"
+          className="px-2.5 py-0.5 text-xs font-mono rounded bg-red-500/20 hover:bg-red-500/30 text-red-400 hover:text-red-300 border border-red-500/30 transition-colors"
         >
           Cancel
         </button>
@@ -33,12 +33,14 @@ export const OAuth2GetTokenButton: React.FC<OAuth2GetTokenButtonProps> = ({
   }
 
   return (
-    <button
-      onClick={onGetToken}
-      disabled={disabled}
-      className="mt-2 px-3 py-1 text-xs font-mono rounded bg-accent/20 hover:bg-accent/30 text-accent border border-accent/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-    >
-      Get Token
-    </button>
+    <div className="py-1">
+      <button
+        onClick={onGetToken}
+        disabled={disabled}
+        className="px-2.5 py-0.5 text-xs font-mono rounded bg-accent/20 hover:bg-accent/30 text-accent border border-accent/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        Get Token
+      </button>
+    </div>
   );
 };

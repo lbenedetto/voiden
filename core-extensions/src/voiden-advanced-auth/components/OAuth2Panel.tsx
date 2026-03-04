@@ -1,7 +1,7 @@
 /**
  * Main OAuth2 configuration panel.
- * Renders grant type selector, dynamic config fields, Get Token button,
- * and token display. Replaces the simple table for oauth2 auth type.
+ * Renders key-value table rows matching the ProseMirror table cell pattern,
+ * plus Get Token button and token display.
  */
 
 // Use (window as any).electron to access the Electron preload API
@@ -14,12 +14,13 @@ import type {
   OAuth2TokenResponse,
   OAuth2AddTokenTo,
 } from "../lib/oauth2/types";
-import { DEFAULT_OAUTH2_CONFIG, GRANT_TYPE_LABELS } from "../lib/oauth2/types";
+import { GRANT_TYPE_LABELS } from "../lib/oauth2/types";
 import {
   generateCodeVerifier,
   generateCodeChallenge,
   generateState,
 } from "../lib/oauth2/pkce";
+import { Row, SelectRow, CheckboxRow } from "./OAuth2Row";
 import { OAuth2GrantFields } from "./OAuth2GrantFields";
 import { OAuth2TokenDisplay } from "./OAuth2TokenDisplay";
 import { OAuth2GetTokenButton } from "./OAuth2GetTokenButton";
@@ -30,10 +31,15 @@ interface OAuth2PanelProps {
   disabled?: boolean;
 }
 
-const selectClass =
-  "text-xs font-mono bg-bg text-text border border-stone-700/50 rounded px-2 py-1 focus:outline-none focus:border-accent transition-colors";
+const grantTypeOptions = Object.entries(GRANT_TYPE_LABELS).map(([value, label]) => ({
+  value,
+  label,
+}));
 
-const labelClass = "block text-xs text-comment mb-0.5";
+const addTokenToOptions = [
+  { value: "header", label: "Header" },
+  { value: "query", label: "Query Param" },
+];
 
 export const OAuth2Panel: React.FC<OAuth2PanelProps> = ({
   config,
@@ -52,9 +58,6 @@ export const OAuth2Panel: React.FC<OAuth2PanelProps> = ({
     [config, onConfigChange],
   );
 
-  /**
-   * Save token to runtime variables (.voiden/.process.env.json)
-   */
   const saveTokenToVariables = useCallback(
     async (tokenResponse: OAuth2TokenResponse) => {
       try {
@@ -71,8 +74,18 @@ export const OAuth2Panel: React.FC<OAuth2PanelProps> = ({
           vars[`${prefix}_expires_at`] = expAt;
           setExpiresAt(expAt);
         }
+        // Save refresh config so the auto-refresh hook can work
+        // without needing access to the editor/auth node
+        if (config.autoRefresh) {
+          vars[`${prefix}_refresh_config`] = JSON.stringify({
+            tokenUrl: config.tokenUrl,
+            clientId: config.clientId,
+            clientSecret: config.clientSecret,
+            scope: config.scope,
+            variablePrefix: prefix,
+          });
+        }
 
-        // Read existing vars, merge, write back
         const existing = await (window as any).electron?.variables?.read();
         const merged = { ...(existing || {}), ...vars };
         await (window as any).electron?.variables?.writeVariables(
@@ -82,12 +95,9 @@ export const OAuth2Panel: React.FC<OAuth2PanelProps> = ({
         console.error("Failed to save OAuth2 tokens to runtime variables:", err);
       }
     },
-    [config.variablePrefix],
+    [config.variablePrefix, config.autoRefresh, config.tokenUrl, config.clientId, config.clientSecret, config.scope],
   );
 
-  /**
-   * Execute the appropriate OAuth2 flow based on grant type.
-   */
   const handleGetToken = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -168,102 +178,63 @@ export const OAuth2Panel: React.FC<OAuth2PanelProps> = ({
   }, []);
 
   return (
-    <div className="px-3 py-2 space-y-2 text-xs font-mono">
-      {/* Top row: Grant Type, Add Token To, Header Prefix, Auto Refresh */}
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className={labelClass}>Grant Type</label>
-          <select
-            value={config.grantType}
-            onChange={(e) =>
-              updateField("grantType", e.target.value as OAuth2GrantType)
-            }
-            disabled={disabled}
-            className={`w-full ${selectClass}`}
-          >
-            {Object.entries(GRANT_TYPE_LABELS).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className={labelClass}>Add Token To</label>
-          <select
-            value={config.addTokenTo}
-            onChange={(e) =>
-              updateField("addTokenTo", e.target.value as OAuth2AddTokenTo)
-            }
-            disabled={disabled}
-            className={`w-full ${selectClass}`}
-          >
-            <option value="header">Header</option>
-            <option value="query">Query Param</option>
-          </select>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className={labelClass}>Header Prefix</label>
-          <input
-            type="text"
-            value={config.headerPrefix}
-            onChange={(e) => updateField("headerPrefix", e.target.value)}
-            disabled={disabled}
-            className={`w-full ${selectClass}`}
-            placeholder="Bearer"
-          />
-        </div>
-        <div>
-          <label className={labelClass}>Variable Prefix</label>
-          <input
-            type="text"
-            value={config.variablePrefix}
-            onChange={(e) => updateField("variablePrefix", e.target.value)}
-            disabled={disabled}
-            className={`w-full ${selectClass}`}
-            placeholder="oauth2"
-          />
-        </div>
-      </div>
-
-      <div className="flex items-center pb-0.5">
-        <label className="flex items-center gap-1.5 text-xs text-text cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={config.autoRefresh}
-            onChange={(e) => updateField("autoRefresh", e.target.checked)}
-            disabled={disabled}
-            className="rounded border-stone-700/50"
-          />
-          Auto Refresh
-        </label>
-      </div>
-
-      {/* Separator */}
-      <div className="border-t border-stone-700/30" />
-
-      {/* Dynamic grant-type fields */}
-      <div className="space-y-1.5">
-        <OAuth2GrantFields
-          config={config}
-          onChange={updateField}
-          disabled={disabled}
-        />
-      </div>
-
-      {/* Get Token button */}
-      <OAuth2GetTokenButton
-        loading={loading}
-        onGetToken={handleGetToken}
-        onCancel={handleCancel}
+    <div className="text-sm font-mono">
+      {/* Config table rows */}
+      <SelectRow
+        k="grant_type"
+        value={config.grantType}
+        onChange={(v) => updateField("grantType", v as OAuth2GrantType)}
+        options={grantTypeOptions}
+        disabled={disabled}
+      />
+      <SelectRow
+        k="add_token_to"
+        value={config.addTokenTo}
+        onChange={(v) => updateField("addTokenTo", v as OAuth2AddTokenTo)}
+        options={addTokenToOptions}
+        disabled={disabled}
+      />
+      <Row
+        k="header_prefix"
+        value={config.headerPrefix}
+        onChange={(v) => updateField("headerPrefix", v)}
+        placeholder="Bearer"
+        disabled={disabled}
+      />
+      <Row
+        k="variable_prefix"
+        value={config.variablePrefix}
+        onChange={(v) => updateField("variablePrefix", v)}
+        placeholder="oauth2"
+        disabled={disabled}
+      />
+      <CheckboxRow
+        k="auto_refresh"
+        checked={config.autoRefresh}
+        onChange={(v) => updateField("autoRefresh", v)}
         disabled={disabled}
       />
 
-      {/* Token display */}
-      <OAuth2TokenDisplay token={token} expiresAt={expiresAt} error={error} />
+      {/* Separator */}
+      <div className="border-t border-border" />
+
+      {/* Grant-type specific rows */}
+      <OAuth2GrantFields
+        config={config}
+        onChange={updateField}
+        disabled={disabled}
+      />
+
+      {/* Get Token button + Token display */}
+      <div className="px-2 py-1.5">
+        <OAuth2GetTokenButton
+          loading={loading}
+          onGetToken={handleGetToken}
+          onCancel={handleCancel}
+          disabled={disabled}
+        />
+        <OAuth2TokenDisplay token={token} expiresAt={expiresAt} error={error} />
+      </div>
     </div>
   );
 };

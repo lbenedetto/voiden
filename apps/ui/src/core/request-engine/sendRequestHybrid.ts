@@ -317,6 +317,7 @@ export async function sendRequestHybrid(
     await hookRegistry.executeHooks(PipelineStage.RequestCompilation, {
       editor,
       requestState,
+      auth: request.auth,
       addHeader: (key: string, value: string) => {
         requestState.headers.push({ key, value, enabled: true });
       },

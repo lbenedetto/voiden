@@ -45,47 +45,41 @@ export default function createAdvancedAuthPlugin(context: PluginContext) {
           'request-compilation' as any,
           async (ctx: any) => {
             try {
-              const editor = ctx?.editor;
-              if (!editor) return;
+              // Check if this request uses oauth2 auth (passed from sendRequestHybrid)
+              const auth = ctx?.auth;
+              if (!auth?.enabled || auth.type !== 'oauth2') return;
+              if (!auth.config?.autoRefresh) return;
 
-              const json = editor.getJSON?.();
-              if (!json?.content) return;
-
-              // Find auth node
-              const authNode = json.content.find((n: any) => n.type === 'auth');
-              if (!authNode?.attrs || authNode.attrs.authType !== 'oauth2') return;
-
-              // Parse oauth2Config
-              let oauth2Config: any;
-              try {
-                const raw = authNode.attrs.oauth2Config;
-                if (typeof raw === 'string') oauth2Config = JSON.parse(raw);
-                else if (typeof raw === 'object') oauth2Config = raw;
-              } catch { return; }
-
-              if (!oauth2Config?.autoRefresh) return;
-
-              const varPrefix = oauth2Config.variablePrefix || 'oauth2';
+              const varPrefix = auth.config.variablePrefix || 'oauth2';
 
               // Check if token is expired
               const expiresAt = await (window as any).electron?.variables?.get(`${varPrefix}_expires_at`);
               if (!expiresAt || Date.now() < Number(expiresAt)) return; // not expired
 
               // Check if we have a refresh token
-              const refreshToken = await (window as any).electron?.variables?.get(`${varPrefix}_refresh_token`);
-              if (!refreshToken) return; // no refresh token available
+              const storedRefreshToken = await (window as any).electron?.variables?.get(`${varPrefix}_refresh_token`);
+              if (!storedRefreshToken) return;
 
-              // Refresh the token via Electron IPC (handles {{VARIABLE}} resolution internally)
+              // Get refresh config from runtime variables (saved by Get Token)
+              const rawRefreshConfig = await (window as any).electron?.variables?.get(`${varPrefix}_refresh_config`);
+              let refreshConfig: any;
+              try {
+                refreshConfig = typeof rawRefreshConfig === 'string'
+                  ? JSON.parse(rawRefreshConfig)
+                  : rawRefreshConfig;
+              } catch { return; }
+              if (!refreshConfig) return;
+
+              // Refresh the token via Electron IPC
               const result = await (window as any).electron?.oauth2?.refreshToken({
-                tokenUrl: oauth2Config.tokenUrl || '',
-                clientId: oauth2Config.clientId || '',
-                clientSecret: oauth2Config.clientSecret || '',
-                refreshToken,
-                scope: oauth2Config.scope || '',
+                tokenUrl: refreshConfig.tokenUrl || '',
+                clientId: refreshConfig.clientId || '',
+                clientSecret: refreshConfig.clientSecret || '',
+                refreshToken: storedRefreshToken,
+                scope: refreshConfig.scope || '',
               });
 
               if (result?.accessToken) {
-                // Write new token values to .voiden/.process.env.json
                 const existing = await (window as any).electron?.variables?.read() || {};
                 const updated: Record<string, any> = {
                   ...existing,
@@ -99,6 +93,7 @@ export default function createAdvancedAuthPlugin(context: PluginContext) {
                   updated[`${varPrefix}_expires_at`] = Date.now() + result.expiresIn * 1000;
                 }
                 await (window as any).electron?.variables?.writeVariables(JSON.stringify(updated, null, 2));
+                console.log(`[OAuth2 Auto-Refresh] Token refreshed for prefix "${varPrefix}"`);
               }
             } catch (err) {
               console.warn('[OAuth2 Auto-Refresh] Failed to refresh token:', err);

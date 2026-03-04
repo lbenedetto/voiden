@@ -573,6 +573,7 @@ export const getRequest = async (
           headerPrefix: oauth2Attrs.headerPrefix || config.header_prefix || "Bearer",
           addTokenTo: oauth2Attrs.addTokenTo || config.add_token_to || "header",
           autoRefresh: oauth2Attrs.autoRefresh === true,
+          variablePrefix: varPrefix,
           grantType: oauth2Attrs.grantType || "authorization_code",
           tokenUrl: oauth2Attrs.tokenUrl || "",
           clientId: oauth2Attrs.clientId || "",
