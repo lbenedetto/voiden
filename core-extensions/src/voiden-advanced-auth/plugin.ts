@@ -77,6 +77,8 @@ export default function createAdvancedAuthPlugin(context: PluginContext) {
                 clientSecret: refreshConfig.clientSecret || '',
                 refreshToken: storedRefreshToken,
                 scope: refreshConfig.scope || '',
+                clientAuthMethod: refreshConfig.clientAuthMethod || 'client_secret_post',
+                customParams: refreshConfig.customParams || '',
               });
 
               if (result?.accessToken) {

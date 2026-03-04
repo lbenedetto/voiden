@@ -10,6 +10,8 @@ export type OAuth2GrantType =
 
 export type OAuth2AddTokenTo = "header" | "query";
 
+export type OAuth2ClientAuthMethod = "client_secret_post" | "client_secret_basic";
+
 export interface OAuth2Config {
   grantType: OAuth2GrantType;
   authUrl: string;
@@ -24,6 +26,8 @@ export interface OAuth2Config {
   addTokenTo: OAuth2AddTokenTo;
   headerPrefix: string;
   autoRefresh: boolean;
+  clientAuthMethod: OAuth2ClientAuthMethod;
+  customParams: string;
 }
 
 export interface OAuth2TokenResponse {
@@ -94,6 +98,8 @@ export const DEFAULT_OAUTH2_CONFIG: OAuth2Config = {
   addTokenTo: "header",
   headerPrefix: "Bearer",
   autoRefresh: false,
+  clientAuthMethod: "client_secret_post",
+  customParams: "",
 };
 
 export const GRANT_TYPE_LABELS: Record<OAuth2GrantType, string> = {

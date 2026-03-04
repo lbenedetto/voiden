@@ -5,7 +5,7 @@ import { getAuthTableRows, getOAuth2TableRows } from "../lib/utils";
 import { Row, SelectRow, CheckboxRow } from "../components/OAuth2Row";
 import { OAuth2GetTokenButton } from "../components/OAuth2GetTokenButton";
 import { OAuth2TokenDisplay } from "../components/OAuth2TokenDisplay";
-import type { OAuth2Config, OAuth2GrantType, OAuth2TokenResponse, OAuth2AddTokenTo } from "../lib/oauth2/types";
+import type { OAuth2Config, OAuth2GrantType, OAuth2TokenResponse, OAuth2AddTokenTo, OAuth2ClientAuthMethod } from "../lib/oauth2/types";
 import { DEFAULT_OAUTH2_CONFIG, GRANT_TYPE_LABELS } from "../lib/oauth2/types";
 import {
   generateCodeVerifier,
@@ -37,6 +37,11 @@ const grantTypeOptions = Object.entries(GRANT_TYPE_LABELS).map(([value, label]) 
 const addTokenToOptions = [
   { value: "header", label: "Header" },
   { value: "query", label: "Query Param" },
+];
+
+const clientAuthOptions = [
+  { value: "client_secret_post", label: "Credentials in Body" },
+  { value: "client_secret_basic", label: "Basic Auth Header" },
 ];
 
 // Factory function to create AuthNode with context components
@@ -77,6 +82,7 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
     const [token, setToken] = useState<OAuth2TokenResponse | null>(null);
     const [expiresAt, setExpiresAt] = useState<number | undefined>();
     const [error, setError] = useState<string | null>(null);
+    const [discovering, setDiscovering] = useState(false);
 
     // Parse oauth2Config from node attribute
     const oauth2Config: OAuth2Config = useMemo(() => {
@@ -196,6 +202,45 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
       rebuildTable(filledRows);
     }, [oauth2Config, updateAttributes, getTableValues, rebuildTable]);
 
+    // ── OIDC Discovery ──────────────────────────────────────────────
+    const handleDiscover = useCallback(async () => {
+      const tableValues = getTableValues();
+      const issuerUrl = tableValues.auth_url || "";
+      if (!issuerUrl) {
+        setError("Enter an issuer URL in auth_url first");
+        return;
+      }
+      setDiscovering(true);
+      setError(null);
+      try {
+        const config = await (window as any).electron!.oauth2!.discover({ issuerUrl });
+
+        // Build updated rows from current table, replacing discovered values
+        const currentValues = getTableValues();
+        if (config.authorization_endpoint) {
+          currentValues.auth_url = String(config.authorization_endpoint);
+        }
+        if (config.token_endpoint) {
+          currentValues.token_url = String(config.token_endpoint);
+        }
+        if (config.scopes_supported && !currentValues.scope) {
+          const scopes = config.scopes_supported as string[];
+          const common = ["openid", "profile", "email"];
+          const subset = common.filter((s) => scopes.includes(s));
+          currentValues.scope = subset.length > 0 ? subset.join(" ") : scopes.slice(0, 5).join(" ");
+        }
+
+        // Rebuild the table with updated values
+        const expectedRows = getOAuth2TableRows(oauth2Config.grantType);
+        const filledRows = expectedRows.map(([key, def]) => [key, currentValues[key] || def]);
+        rebuildTable(filledRows);
+      } catch (err: any) {
+        setError(err.message || "Discovery failed");
+      } finally {
+        setDiscovering(false);
+      }
+    }, [getTableValues, oauth2Config.grantType, rebuildTable]);
+
     // ── Resolve {{process.xxx}} patterns using runtime variables ─────
     const resolveProcessVars = async (text: string): Promise<string> => {
       if (!text || !text.includes("{{process.")) return text;
@@ -239,6 +284,8 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
               clientSecret: tableValues.client_secret || "",
               scope: tableValues.scope || "",
               variablePrefix: prefix,
+              clientAuthMethod: oauth2Config.clientAuthMethod || "client_secret_post",
+              customParams: oauth2Config.customParams || "",
             });
           }
           const existing = await (window as any).electron?.variables?.read();
@@ -286,6 +333,8 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
               codeChallenge,
               codeChallengeMethod: "S256",
               state,
+              clientAuthMethod: oauth2Config.clientAuthMethod,
+              customParams: oauth2Config.customParams,
             });
             break;
           }
@@ -299,6 +348,8 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
               scope: tableValues.scope || "",
               callbackUrl: tableValues.callback_url || undefined,
               state,
+              clientAuthMethod: oauth2Config.clientAuthMethod,
+              customParams: oauth2Config.customParams,
             });
             break;
           }
@@ -312,6 +363,8 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
               username: tableValues.username || "",
               password: tableValues.password || "",
               scope: tableValues.scope || "",
+              clientAuthMethod: oauth2Config.clientAuthMethod,
+              customParams: oauth2Config.customParams,
             });
             break;
           }
@@ -323,6 +376,8 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
               clientId: tableValues.client_id || "",
               clientSecret: tableValues.client_secret || "",
               scope: tableValues.scope || "",
+              clientAuthMethod: oauth2Config.clientAuthMethod,
+              customParams: oauth2Config.customParams,
             });
             break;
           }
@@ -451,9 +506,37 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
               onChange={(v) => handleOAuth2ConfigChange("autoRefresh", v)}
               disabled={!isEditable}
             />
+            <SelectRow
+              k="client_auth"
+              value={oauth2Config.clientAuthMethod}
+              onChange={(v) => handleOAuth2ConfigChange("clientAuthMethod", v as OAuth2ClientAuthMethod)}
+              options={clientAuthOptions}
+              disabled={!isEditable}
+            />
+            <Row
+              k="extra_params"
+              value={oauth2Config.customParams}
+              onChange={(v) => handleOAuth2ConfigChange("customParams", v)}
+              placeholder="key=value&key2=value2"
+              disabled={!isEditable}
+            />
 
             {/* Separator */}
             <div className="border-t border-border" />
+
+            {/* Discover button (only for grant types with auth_url) */}
+            {(oauth2Config.grantType === "authorization_code" || oauth2Config.grantType === "implicit") && (
+              <div className="px-2 py-1">
+                <button
+                  type="button"
+                  onClick={handleDiscover}
+                  disabled={!isEditable || discovering}
+                  className="text-xs font-mono text-comment hover:text-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {discovering ? "Discovering..." : "Discover OIDC Endpoints"}
+                </button>
+              </div>
+            )}
 
             {/* TipTap table with grant-specific fields */}
             <div

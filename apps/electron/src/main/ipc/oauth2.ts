@@ -39,9 +39,40 @@ async function replaceVarsInParams<T extends Record<string, unknown>>(
  * POST to a token endpoint with form-urlencoded body.
  * Uses dynamic import for undici to avoid bundling issues.
  */
+/**
+ * Parse custom params string (key=value&key2=value2) into a record.
+ * Runs replaceVariablesSecure on values.
+ */
+async function parseCustomParams(
+  raw: string,
+  projectPath: string,
+): Promise<Record<string, string>> {
+  const result: Record<string, string> = {};
+  if (!raw || !raw.trim()) return result;
+  for (const pair of raw.split("&")) {
+    const eqIdx = pair.indexOf("=");
+    if (eqIdx === -1) continue;
+    const key = decodeURIComponent(pair.slice(0, eqIdx).trim());
+    let value = pair.slice(eqIdx + 1).trim();
+    if (value.includes("{{")) {
+      value = await replaceVariablesSecure(value, projectPath);
+    }
+    if (key) result[key] = value;
+  }
+  return result;
+}
+
+/**
+ * Build Basic auth header from client credentials.
+ */
+function buildBasicAuthHeader(clientId: string, clientSecret: string): string {
+  return `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
+}
+
 async function postTokenRequest(
   tokenUrl: string,
   body: Record<string, string>,
+  authHeader?: string,
 ): Promise<Record<string, unknown>> {
   const { request } = await import("undici");
 
@@ -53,12 +84,17 @@ async function postTokenRequest(
     }
   }
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/x-www-form-urlencoded",
+    Accept: "application/json",
+  };
+  if (authHeader) {
+    headers.Authorization = authHeader;
+  }
+
   const res = await request(tokenUrl, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-    },
+    headers,
     body: formParts.join("&"),
   });
 
@@ -136,6 +172,47 @@ if (hash) {
 // ─── IPC Registration ──────────────────────────────────────────────
 
 export function registerOAuth2IpcHandlers() {
+  // ── OIDC Discovery ──────────────────────────────────────────────
+  ipcMain.handle("oauth2:discover", async (event, params) => {
+    const projectPath = await getActiveProject(event);
+    if (!projectPath) throw new Error("No active project");
+
+    let issuerUrl: string = params.issuerUrl || "";
+    if (issuerUrl.includes("{{")) {
+      issuerUrl = await replaceVariablesSecure(issuerUrl, projectPath);
+    }
+
+    // Strip trailing slash
+    issuerUrl = issuerUrl.replace(/\/+$/, "");
+
+    // If it looks like a full authorization endpoint, strip to base URL
+    issuerUrl = issuerUrl.replace(/\/(authorize|auth|oauth2?\/authorize|oauth2?\/auth)(\/.*)?$/i, "");
+
+    const discoveryUrl = `${issuerUrl}/.well-known/openid-configuration`;
+    const { request } = await import("undici");
+
+    const res = await request(discoveryUrl, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      headersTimeout: 10_000,
+      bodyTimeout: 10_000,
+    });
+
+    const text = await res.body.text();
+    let json: Record<string, unknown>;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      throw new Error(`Discovery endpoint returned non-JSON: ${text.slice(0, 200)}`);
+    }
+
+    if (!json.authorization_endpoint && !json.token_endpoint) {
+      throw new Error("Discovery response missing authorization_endpoint and token_endpoint");
+    }
+
+    return json;
+  });
+
   // ── Authorization Code (PKCE) ────────────────────────────────────
   ipcMain.handle("oauth2:startAuthCodeFlow", async (event, params) => {
     const projectPath = await getActiveProject(event);
@@ -267,7 +344,19 @@ export function registerOAuth2IpcHandlers() {
               if (clientSecret) tokenBody.client_secret = clientSecret;
               if (codeVerifier) tokenBody.code_verifier = codeVerifier;
 
-              const raw = await postTokenRequest(tokenUrl, tokenBody);
+              // Client auth method
+              let authHeader: string | undefined;
+              if (p.clientAuthMethod === "client_secret_basic" && clientId) {
+                authHeader = buildBasicAuthHeader(clientId, clientSecret || "");
+                delete tokenBody.client_id;
+                delete tokenBody.client_secret;
+              }
+
+              // Merge custom params
+              const custom = await parseCustomParams(p.customParams || "", projectPath);
+              Object.assign(tokenBody, custom);
+
+              const raw = await postTokenRequest(tokenUrl, tokenBody, authHeader);
               const result = normalizeTokenResponse(raw);
 
               server.close();
@@ -411,7 +500,17 @@ export function registerOAuth2IpcHandlers() {
     if (p.clientSecret) body.client_secret = p.clientSecret;
     if (p.scope) body.scope = p.scope;
 
-    const raw = await postTokenRequest(p.tokenUrl, body);
+    let authHeader: string | undefined;
+    if (p.clientAuthMethod === "client_secret_basic" && p.clientId) {
+      authHeader = buildBasicAuthHeader(p.clientId, p.clientSecret || "");
+      delete body.client_id;
+      delete body.client_secret;
+    }
+
+    const custom = await parseCustomParams(p.customParams || "", projectPath);
+    Object.assign(body, custom);
+
+    const raw = await postTokenRequest(p.tokenUrl, body, authHeader);
     return normalizeTokenResponse(raw);
   });
 
@@ -429,7 +528,17 @@ export function registerOAuth2IpcHandlers() {
     };
     if (p.scope) body.scope = p.scope;
 
-    const raw = await postTokenRequest(p.tokenUrl, body);
+    let authHeader: string | undefined;
+    if (p.clientAuthMethod === "client_secret_basic" && p.clientId) {
+      authHeader = buildBasicAuthHeader(p.clientId, p.clientSecret || "");
+      delete body.client_id;
+      delete body.client_secret;
+    }
+
+    const custom = await parseCustomParams(p.customParams || "", projectPath);
+    Object.assign(body, custom);
+
+    const raw = await postTokenRequest(p.tokenUrl, body, authHeader);
     return normalizeTokenResponse(raw);
   });
 
@@ -448,7 +557,17 @@ export function registerOAuth2IpcHandlers() {
     if (p.clientSecret) body.client_secret = p.clientSecret;
     if (p.scope) body.scope = p.scope;
 
-    const raw = await postTokenRequest(p.tokenUrl, body);
+    let authHeader: string | undefined;
+    if (p.clientAuthMethod === "client_secret_basic" && p.clientId) {
+      authHeader = buildBasicAuthHeader(p.clientId, p.clientSecret || "");
+      delete body.client_id;
+      delete body.client_secret;
+    }
+
+    const custom = await parseCustomParams(p.customParams || "", projectPath);
+    Object.assign(body, custom);
+
+    const raw = await postTokenRequest(p.tokenUrl, body, authHeader);
     return normalizeTokenResponse(raw);
   });
 

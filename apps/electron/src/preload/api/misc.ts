@@ -193,6 +193,7 @@ export const oauth2Api = {
   clientCredentialsGrant: (params: any) => ipcRenderer.invoke("oauth2:clientCredentialsGrant", params),
   refreshToken: (params: any) => ipcRenderer.invoke("oauth2:refreshToken", params),
   cancelFlow: () => ipcRenderer.invoke("oauth2:cancelFlow"),
+  discover: (params: any) => ipcRenderer.invoke("oauth2:discover", params),
 };
 
 export const variablesApi = {
