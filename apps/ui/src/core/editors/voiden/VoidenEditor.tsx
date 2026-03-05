@@ -3,7 +3,6 @@ import { AnyExtension, Editor, EditorContent, Extension, getSchema, useEditor } 
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 import { useVoidVariableData } from "@/core/runtimeVariables/hook/useVariableCapture.tsx";
-import { useActiveEnvironment } from "@/core/environment/hooks";
 // Escape user input for literal searches
 function escapeRegExp(str: string) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -113,8 +112,8 @@ import { useEditorEnhancementStore } from "@/plugins";
 import { parseMarkdown } from "./markdownConverter";
 import UniqueID from "./extensions/uniqueId";
 import { VoidenDragMenu } from "./components/VoidenDragMenu";
-import { useEnvironmentKeys, useEnvironments } from "@/core/environment/hooks";
-import { environmentHighlighter, updateEnvironmentKeys } from "./extensions/environmentHighlighter";
+import { useActiveEnvironment, useEnvironmentKeys, useEnvironments } from "@/core/environment/hooks";
+import { environmentHighlighter, updateEnvironmentData, updateEnvironmentKeys } from "./extensions/environmentHighlighter";
 import { ReqSuggestion } from "./extensions/VariableReqSuggesion";
 import { ResSuggestion } from "./extensions/VariableResSuggestion";
 import { useContentStore } from "@/core/stores/ContentStore";
@@ -122,7 +121,7 @@ import { saveFileUtil } from "@/core/file-system/hooks";
 import { ArrowDownIcon, ArrowUpIcon, X } from "lucide-react";
 import { Input } from "@/core/components/ui/input";
 import { cn } from "@/core/lib/utils";
-import { variableHighlighter, updateVariableKeys } from "./extensions/variableHighlighter";
+import { variableHighlighter, updateVariableData, updateVariableKeys } from "./extensions/variableHighlighter";
 import { useSearchStore } from "@/core/stores/searchParamsStore";
 import { usePanelStore } from "@/core/stores/panelStore";
 import { useGetActiveDocument } from "@/core/documents/hooks";
@@ -348,6 +347,8 @@ const VoidenEditorInner = ({
   const getScrollPosition = useEditorStore((state) => state.getScrollPosition);
   const { finalExtensions, memoizedSchema } = useVoidenExtensionsAndSchema();
   const { data: envData } = useEnvironments();
+  const activeEnvData = useActiveEnvironment();
+  const { data: voidVariableData } = useVoidVariableData();
   const activeEnvKey = envData?.activeEnv ?? "default";
   const extensionsKey = useMemo(() => finalExtensions.map((ext) => ext.name).join(","), [finalExtensions]);
   const { data: activeDocument } = useGetActiveDocument();
@@ -736,12 +737,12 @@ function sanitizeDoc(node: any): any {
     return () => clearTimeout(timeoutId);
   }, [activeEnvKey]);
 
-  // Force highlight update when environment keys change - using debounced env key
+  // Keep highlight maps in sync with full resolved values so hover preview can display them.
   useEffect(() => {
     if (!editor || !isActive) return;
-    updateEnvironmentKeys(envKeys ?? []);
+    updateEnvironmentData(activeEnvData ?? {});
     editor.view.dispatch(editor.state.tr.setMeta("forceHighlightUpdate", true));
-  }, [editor, debouncedActiveEnvKey, isActive]);
+  }, [editor, debouncedActiveEnvKey, activeEnvData, isActive]);
 
   // Register reload function for this tab
   useEffect(() => {
@@ -784,17 +785,32 @@ function sanitizeDoc(node: any): any {
     };
   }, [editor, source, tabId, clearUnsaved, memoizedSchema]);
 
-  // Also force update when envKeys data changes (for initial load)
+  // Fallback: if full value maps are unavailable, keep validity highlighting via keys-only lists.
   const { data: envKeys } = useEnvironmentKeys();
   const { data: voidVariableKeys } = useVoidVariables();
   const queryClient = useQueryClient();
   useEffect(() => {
-    if (!editor || !envKeys || !isActive) return;
-    updateEnvironmentKeys(envKeys);
-    updateVariableKeys(voidVariableKeys ?? []);
-    editor.view.dispatch(editor.state.tr.setMeta("forceHighlightUpdate", true));
+    if (!editor || !isActive) return;
+
+    const hasEnvValues = !!activeEnvData && Object.keys(activeEnvData).length > 0;
+    const hasProcessValues = !!voidVariableData && Object.keys(voidVariableData).length > 0;
+
+    if (!hasEnvValues) {
+      updateEnvironmentKeys(envKeys ?? []);
+      editor.view.dispatch(editor.state.tr.setMeta("forceHighlightUpdate", true));
+    }
+    if (!hasProcessValues) {
+      updateVariableKeys(voidVariableKeys ?? []);
+      editor.view.dispatch(editor.state.tr.setMeta("forceVariableHighlightUpdate", true));
+    }
+  }, [editor, envKeys, voidVariableKeys, activeEnvData, voidVariableData, isActive]);
+
+  // Keep process/runtime variable values in sync for hover preview.
+  useEffect(() => {
+    if (!editor || !isActive) return;
+    updateVariableData(voidVariableData ?? {});
     editor.view.dispatch(editor.state.tr.setMeta("forceVariableHighlightUpdate", true));
-  }, [editor, envKeys, voidVariableKeys, isActive]);
+  }, [editor, voidVariableData, isActive]);
 
   // When this tab becomes active, refresh environment keys, file-link existence
   // checks, and block-link content so stale data from when the tab was hidden
