@@ -1,5 +1,6 @@
 # Changelog
 
+<<<<<<< HEAD
 ## v1.3.0-beta.1 — 05/03/2026
 
 Beta release introducing community plugin support with install-from-zip and registry browser, OAuth2 authorization code flow improvements, tooltip previews for environment and runtime variables, and terminal reliability fixes.
@@ -19,6 +20,8 @@ Beta release introducing community plugin support with install-from-zip and regi
 
 ---
 
+=======
+>>>>>>> origin/main
 ## v1.2.0-beta.1 — 24/02/2026
 
 Beta release introducing pre/post request scripting, YAML environment configuration, improved file explorer navigation, drag-and-drop file management, YAML content-type support, and response preview improvements.

@@ -4,12 +4,13 @@ export type ResponseChildNodeType =
   | "response-body"
   | "response-headers"
   | "request-headers"
+  | "request-headers-security"
   | "assertion-results"
   | "openapi-validation-results"
   | "script-assertion-results";
 
 /**
- * Hook for child nodes inside a `response-doc` to read the parent's openNodes state.
+ * Hook for child nodes inside a `response-doc` to read the parent's state.
  * Provided to plugins via context.ui.hooks — do not redefine locally in plugin files.
  */
 export const useParentResponseDoc = (editor: any, getPos: () => number) => {
@@ -33,9 +34,7 @@ export const useParentResponseDoc = (editor: any, getPos: () => number) => {
             const rawOpenNodes = node.attrs.openNodes;
             const openNodes: ResponseChildNodeType[] = Array.isArray(rawOpenNodes)
               ? rawOpenNodes
-              : typeof rawOpenNodes === "string"
-                ? JSON.parse(rawOpenNodes)
-                : [];
+              : [];
             setParentState({ openNodes, parentPos: $pos.before(d) });
             return;
           }
