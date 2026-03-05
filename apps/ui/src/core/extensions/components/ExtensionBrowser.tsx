@@ -1,4 +1,5 @@
 import { Search, Settings, Loader2, Shield, BadgeCheck, Users, Upload } from "lucide-react";
+import { useEffect } from "react";
 import {
   useGetExtensions,
   useInstallExtension,
@@ -12,6 +13,7 @@ import type { Extension } from "@/types";
 import { cn } from "@/core/lib/utils";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { usePluginStore } from "@/plugins";
+import { toast } from "@/core/components/ui/sonner";
 
 const ExtensionItem = ({ extension }: { extension: Extension }) => {
   const installMutation = useInstallExtension();
@@ -183,9 +185,12 @@ const ExtensionItem = ({ extension }: { extension: Extension }) => {
       {/* Actions - positioned absolutely to avoid overlap */}
       <div className="absolute top-2 right-2 flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
         {error && (
-          <div className="flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-red-500/10 border border-red-500/30 text-red-400">
+          <button
+            onClick={(e) => { e.stopPropagation(); toast.error(error.error); }}
+            className="flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 transition-colors"
+          >
             Error
-          </div>
+          </button>
         )}
         {renderActions()}
       </div>
@@ -203,6 +208,12 @@ const ExtensionItem = ({ extension }: { extension: Extension }) => {
 export const ExtensionBrowser = () => {
   const { data: extensions, isLoading } = useGetExtensions();
   const installFromZip = useInstallExtensionFromZip();
+
+  useEffect(() => {
+    if (installFromZip.isError) {
+      toast.error((installFromZip.error as Error)?.message || "Failed to install extension");
+    }
+  }, [installFromZip.isError, installFromZip.error]);
 
   if (isLoading) return <div>Loading...</div>;
 
@@ -233,11 +244,6 @@ export const ExtensionBrowser = () => {
           )}
           {installFromZip.isPending ? "Installing..." : "Install from file"}
         </button>
-        {installFromZip.isError && (
-          <p className="mt-1 text-xs text-red-400 px-1">
-            {(installFromZip.error as Error)?.message || "Failed to install extension"}
-          </p>
-        )}
       </div>
 
       <div className=" border-border flex-1 flex flex-col mb-1.5 overflow-y-scroll" >

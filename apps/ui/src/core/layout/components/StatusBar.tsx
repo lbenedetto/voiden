@@ -210,7 +210,7 @@ export const StatusBar = ({
                 onClick={handleCheckForUpdates}
                 disabled={isCheckingUpdates}
                 className={cn(
-                  "h-full pt-1 px-2 hover:bg-active text-comment select-none transition-opacity",
+                  "h-full px-2 hover:bg-active text-comment select-none transition-opacity",
                   isCheckingUpdates ? "opacity-50 cursor-wait" : "cursor-pointer"
                 )}
               >
@@ -223,14 +223,14 @@ export const StatusBar = ({
 
           {/* GitHub Link */}
           <Tip label="Visit GitHub" align="end">
-            <a href="https://github.com/VoidenHQ/voiden" onClick={handleExternalLink("https://github.com/VoidenHQ/voiden")} className="h-full pt-2 px-2 hover:bg-active text-comment flex items-center">
+            <a href="https://github.com/VoidenHQ/voiden" onClick={handleExternalLink("https://github.com/VoidenHQ/voiden")} className="h-full px-2 hover:bg-active text-comment flex items-center">
               <Github size={14} />
             </a>
           </Tip>
 
           {/* Discord Link */}
           <Tip label="Join Discord" align="end">
-            <a href="https://discord.gg/XSYCf7JF4F" onClick={handleExternalLink("https://discord.gg/XSYCf7JF4F")} className="h-full pt-2 px-2 hover:bg-active text-comment flex items-center">
+            <a href="https://discord.gg/XSYCf7JF4F" onClick={handleExternalLink("https://discord.gg/XSYCf7JF4F")} className="h-full px-2 hover:bg-active text-comment flex items-center">
               <MessageCircle size={14} />
             </a>
           </Tip>
