@@ -82,6 +82,7 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
 
     // ── OAuth2 State ──────────────────────────────────────────────────
     const [loading, setLoading] = useState(false);
+    const tokenFlowInFlightRef = useRef(false);
     const [token, setToken] = useState<OAuth2TokenResponse | null>(null);
     const [expiresAt, setExpiresAt] = useState<number | undefined>();
     const [error, setError] = useState<string | null>(null);
@@ -146,9 +147,9 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
         })),
       }] : [];
       if (contentEnd > contentStart) {
-        editor.chain().focus().deleteRange({ from: contentStart, to: contentEnd }).insertContentAt(contentStart, tableContent).run();
+        editor.chain().deleteRange({ from: contentStart, to: contentEnd }).insertContentAt(contentStart, tableContent).run();
       } else {
-        editor.chain().focus().insertContentAt(contentStart, tableContent).run();
+        editor.chain().insertContentAt(contentStart, tableContent).run();
       }
     }, [editor, getPos, node]);
 
@@ -313,6 +314,10 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
     );
 
     const handleGetToken = useCallback(async () => {
+      if (tokenFlowInFlightRef.current) {
+        return;
+      }
+      tokenFlowInFlightRef.current = true;
       const rawValues = getTableValues();
       setLoading(true);
       setError(null);
@@ -402,6 +407,7 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
       } catch (err: any) {
         setError(err.message || "Failed to obtain token");
       } finally {
+        tokenFlowInFlightRef.current = false;
         setLoading(false);
       }
     }, [oauth2Config, getTableValues, saveTokenToVariables]);
@@ -410,6 +416,7 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
       try {
         await ipc('oauth2:cancelFlow');
       } catch { /* ignore */ }
+      tokenFlowInFlightRef.current = false;
       setLoading(false);
     }, []);
 
@@ -494,7 +501,7 @@ export const createAuthNode = (NodeViewWrapper: any, RequestBlockHeader: any, op
             />
             <CheckboxRow
               k="auto_refresh"
-              checked={oauth2Config.autoRefresh}
+              checked={oauth2Config.autoRefresh ?? true}
               onChange={(v) => handleOAuth2ConfigChange("autoRefresh", v)}
               disabled={!isEditable}
             />

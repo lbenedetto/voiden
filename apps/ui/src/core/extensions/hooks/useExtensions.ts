@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 
 export const useGetExtensions = () => {
   return useQuery({
@@ -24,6 +25,9 @@ export const useInstallExtension = () => {
       queryClient.invalidateQueries({ queryKey: ["panel:tabs"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["sidebar:tabs"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["tab:content"], exact: false });
+    },
+    onError: (error: any) => {
+      toast.error(error?.message || "Failed to install extension");
     },
   });
 };
@@ -82,6 +86,9 @@ export const useInstallExtensionFromZip = () => {
       queryClient.invalidateQueries({ queryKey: ["panel:tabs"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["sidebar:tabs"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["tab:content"], exact: false });
+    },
+    onError: (error: any) => {
+      toast.error(error?.message || "Failed to install extension from zip");
     },
   });
 };

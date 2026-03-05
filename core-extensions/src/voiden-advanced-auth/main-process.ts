@@ -99,13 +99,18 @@ async function postTokenRequest(
     headers.Authorization = authHeader;
   }
 
+  const formBody = formParts.join("&");
+  console.log("[OAuth2] Token request →", tokenUrl);
+  console.log("[OAuth2] Token body →", formBody);
+
   const res = await request(tokenUrl, {
     method: "POST",
     headers,
-    body: formParts.join("&"),
+    body: formBody,
   });
 
   const text = await res.body.text();
+  console.log("[OAuth2] Token response ←", text.slice(0, 1000));
   try {
     return JSON.parse(text);
   } catch {
@@ -261,15 +266,26 @@ export default function createOAuth2MainPlugin(ctx: ElectronExtensionContext): E
               shutdownServer("OAuth2 flow timed out (120s)");
             }, 120_000);
 
+            let handled = false;
+            let exchangedCode: string | null = null;
+
             server.on("request", async (req, res) => {
               const url = new URL(req.url || "/", `http://127.0.0.1:${port}`);
 
               if (url.pathname === "/callback") {
+                // Browsers may send duplicate requests (favicon, retries) — only handle once
+                if (handled) {
+                  res.writeHead(200, { "Content-Type": "text/html" });
+                  res.end(SUCCESS_HTML);
+                  return;
+                }
+
                 const code = url.searchParams.get("code");
                 const returnedState = url.searchParams.get("state");
                 const error = url.searchParams.get("error");
 
                 if (error) {
+                  handled = true;
                   res.writeHead(200, { "Content-Type": "text/html" });
                   res.end(
                     `<html><body><h2>Error: ${escapeHtml(error)}</h2><p>${escapeHtml(url.searchParams.get("error_description") || "")}</p></body></html>`,
@@ -283,6 +299,7 @@ export default function createOAuth2MainPlugin(ctx: ElectronExtensionContext): E
                 }
 
                 if (state && returnedState !== state) {
+                  handled = true;
                   res.writeHead(200, { "Content-Type": "text/html" });
                   res.end("<html><body><h2>State mismatch</h2><p>Possible CSRF attack. Please try again.</p></body></html>");
                   clearTimeout(timeout);
@@ -294,6 +311,7 @@ export default function createOAuth2MainPlugin(ctx: ElectronExtensionContext): E
                 }
 
                 if (!code) {
+                  handled = true;
                   res.writeHead(200, { "Content-Type": "text/html" });
                   res.end("<html><body><h2>No authorization code received</h2></body></html>");
                   clearTimeout(timeout);
@@ -304,6 +322,15 @@ export default function createOAuth2MainPlugin(ctx: ElectronExtensionContext): E
                   return;
                 }
 
+                // Defensive guard: never exchange the same code twice in one flow.
+                if (exchangedCode === code) {
+                  res.writeHead(200, { "Content-Type": "text/html" });
+                  res.end(SUCCESS_HTML);
+                  return;
+                }
+
+                handled = true;
+                exchangedCode = code;
                 res.writeHead(200, { "Content-Type": "text/html" });
                 res.end(SUCCESS_HTML);
                 clearTimeout(timeout);

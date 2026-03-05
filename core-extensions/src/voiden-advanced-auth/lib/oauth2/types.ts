@@ -98,7 +98,7 @@ export const DEFAULT_OAUTH2_CONFIG: OAuth2Config = {
   password: "",
   addTokenTo: "header",
   headerPrefix: "Bearer",
-  autoRefresh: false,
+  autoRefresh: true,
   clientAuthMethod: "client_secret_post",
   customParams: "",
   advancedOpen: false,

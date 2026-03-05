@@ -41,6 +41,28 @@ export class ExtensionManager {
         }),
       );
 
+      // Migrate any extensions that were installed before shim support was added
+      await Promise.all(
+        enriched.map(async (ext: ExtensionData) => {
+          if (!ext.installedPath) return;
+          try {
+            const mainPath = path.join(ext.installedPath, "main.js");
+            const mainSource = await fs.readFile(mainPath, "utf8");
+            // Already processed — skip
+            if (mainSource.includes("__voiden_shim_")) return;
+            const prepared = installer.prepareExtensionMain(mainSource);
+            await fs.writeFile(mainPath, prepared.main, "utf8");
+            await Promise.all(
+              Object.entries(prepared.extraFiles).map(([filename, source]) =>
+                fs.writeFile(path.join(ext.installedPath!, filename), source, "utf8"),
+              ),
+            );
+          } catch {
+            // Silently skip — will surface as a load error later
+          }
+        }),
+      );
+
       // merge with core extensions in centralized appState
       this.store.extensions = [...this.store.extensions.filter((ext) => ext.type === "core"), ...enriched];
     } catch (e) {
@@ -104,10 +126,16 @@ export class ExtensionManager {
       throw new Error("repo not defined");
     }
     const { manifest, main } = await installer.getExtensionFiles(extension.repo, extension.version);
+    const prepared = installer.prepareExtensionMain(main);
     const installPath = path.join(communityDir, extension.id);
     await fs.mkdir(installPath, { recursive: true });
     await fs.writeFile(path.join(installPath, "manifest.json"), manifest, "utf8");
-    await fs.writeFile(path.join(installPath, "main.js"), main, "utf8");
+    await fs.writeFile(path.join(installPath, "main.js"), prepared.main, "utf8");
+    await Promise.all(
+      Object.entries(prepared.extraFiles).map(([filename, source]) =>
+        fs.writeFile(path.join(installPath, filename), source, "utf8"),
+      ),
+    );
 
     // Parse the downloaded manifest to extract rich metadata
     let manifestData: any = {};
@@ -223,7 +251,13 @@ export class ExtensionManager {
 
     const mainEntry = zip.getEntry(prefix + "main.js");
     if (!mainEntry) throw new Error("main.js not found in zip");
-    await fs.writeFile(path.join(installPath, "main.js"), mainEntry.getData());
+    const preparedZip = installer.prepareExtensionMain(mainEntry.getData().toString("utf8"));
+    await fs.writeFile(path.join(installPath, "main.js"), preparedZip.main, "utf8");
+    await Promise.all(
+      Object.entries(preparedZip.extraFiles).map(([filename, source]) =>
+        fs.writeFile(path.join(installPath, filename), source, "utf8"),
+      ),
+    );
 
     // Build ExtensionData
     const extension: ExtensionData = {

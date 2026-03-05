@@ -1,5 +1,9 @@
 import { create } from "zustand";
 import { useEffect } from "react";
+import * as _ReactShim from "react";
+import * as _ReactJSXShim from "react/jsx-runtime";
+import * as _ReactDOMShim from "react-dom";
+import * as _ReactDOMClientShim from "react-dom/client";
 import { coreExtensionPlugins, handleCurl, pasteCurl } from "@voiden/core-extensions";
 import { PluginErrorBoundary } from "@/core/components/ErrorBoundary";
 import { getProjects } from "@/core/projects/hooks";
@@ -173,11 +177,18 @@ const loadedPlugins: Map<string, { onload: () => Promise<void>; onunload: () => 
 declare global {
   interface Window {
     __voidenHelpers__?: Record<string, PluginHelpers>;
+    __voiden_shims__?: Record<string, unknown>;
   }
 }
 
 if (typeof window !== 'undefined') {
   window.__voidenHelpers__ = exposedHelpers;
+  window.__voiden_shims__ = {
+    "react": _ReactShim,
+    "react/jsx-runtime": _ReactJSXShim,
+    "react-dom": _ReactDOMShim,
+    "react-dom/client": _ReactDOMClientShim,
+  };
 }
 
 /**

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, useEffect, useRef } from "react";
+import { useCallback, useMemo, useState, useEffect, useRef, memo } from "react";
 import { AnyExtension, Editor, EditorContent, Extension, getSchema, useEditor } from "@tiptap/react";
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
@@ -154,8 +154,8 @@ export const useVoidenExtensionsAndSchema = () => {
   // Compute the schema based on your current extensions.
   const memoizedSchema = useMemo(() => getSchema(memoizedExtensions), [memoizedExtensions]);
 
-  const { data: voidVariableData = {} } = useVoidVariableData();
-  const envData = useActiveEnvironment() ?? {};
+  const { data: voidVariableData } = useVoidVariableData();
+  const envData = useActiveEnvironment();
   const defaultNodeTypes = useMemo(
     () => [
       "doc",
@@ -198,8 +198,8 @@ export const useVoidenExtensionsAndSchema = () => {
       CustomCode,
       ReqSuggestion,
       ResSuggestion,
-      environmentHighlighter(envData),
-      variableHighlighter(voidVariableData),
+      environmentHighlighter(envData ?? {}),
+      variableHighlighter(voidVariableData ?? {}),
       DocumentPreserver, // Preserves unknown nodes from disabled plugins
     ];
     return baseExtensions;
@@ -309,7 +309,7 @@ export const reloadVoidenEditor = async (tabId: string) => {
   }
 };
 
-export const VoidenEditor = ({
+const VoidenEditorInner = ({
   tabId,
   content,
   source,
@@ -337,28 +337,17 @@ export const VoidenEditor = ({
   // Track previous extensionsKey to detect when plugins change
   const prevExtensionsKeyRef = useRef<string | null>(null);
 
-  // When plugins change, clear unsaved state to force reload from file
-  const initialUnsaved = useMemo(() => {
-    const currentExtensionsKey = extensionsKey;
-    const prevExtensionsKey = prevExtensionsKeyRef.current;
-
-    // If extensions changed, clear unsaved and force reload from file
-    if (prevExtensionsKey !== null && prevExtensionsKey !== currentExtensionsKey) {
-      // Clear from store
+  // When plugins change, clear unsaved state to force reload from file.
+  // Using useEffect instead of useMemo to avoid calling Zustand setState during render.
+  useEffect(() => {
+    const prevKey = prevExtensionsKeyRef.current;
+    prevExtensionsKeyRef.current = extensionsKey;
+    if (prevKey !== null && prevKey !== extensionsKey) {
       clearUnsaved(tabId);
-      // Update ref for next check
-      prevExtensionsKeyRef.current = currentExtensionsKey;
-      // Return undefined to force reload from file
-      return undefined;
     }
+  }, [extensionsKey, tabId, clearUnsaved]);
 
-    // First render or no change - use normal unsaved state
-    if (prevExtensionsKey === null) {
-      prevExtensionsKeyRef.current = currentExtensionsKey;
-    }
-
-    return useEditorStore.getState().unsaved[tabId];
-  }, [tabId, extensionsKey, clearUnsaved]);
+  const initialUnsaved = useEditorStore.getState().unsaved[tabId];
 
   useEffect(() => {
     // Always update the store with the new content, or an empty string if undefined.
@@ -598,7 +587,6 @@ function sanitizeDoc(node: any): any {
   const savedContentJSONRef = useRef<string | null>(null);
   useEffect(() => {
     try {
-      console.error("expensive operation")
       const parsed = parseMarkdown(content, memoizedSchema);
       const sanitized = sanitizeDoc(parsed);
       const node = memoizedSchema.nodeFromJSON(sanitized);
@@ -1048,10 +1036,8 @@ function sanitizeDoc(node: any): any {
     }
   }, [editor]);
 
-  // Note: parseError state was removed as we now handle errors gracefully with fallback content
-  if (!editor) return null;
-
   useEffect(() => {
+    if (!editor) return;
     function handleClickOutside(event: MouseEvent) {
       if (editorRef.current && !editorRef.current.contains(event.target as Node)) {
         editor?.commands.blur();
@@ -1063,6 +1049,9 @@ function sanitizeDoc(node: any): any {
       document.removeEventListener("mousedown", handleClickOutside);
     };
   }, [editor]);
+
+  // Note: parseError state was removed as we now handle errors gracefully with fallback content
+  if (!editor) return null;
 
   return (
     <div ref={editorRef} className="h-full flex flex-col relative">
@@ -1263,3 +1252,5 @@ function sanitizeDoc(node: any): any {
     </div>
   );
 };
+
+export const VoidenEditor = memo(VoidenEditorInner);
