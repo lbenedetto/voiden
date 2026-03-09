@@ -1,5 +1,26 @@
 [
   {
+    "version": "v1.3.0-beta.2",
+    "date": "09/03/2026",
+    "title": "Auto-Save Timeout, Cookie Parser & Response Panel Fixes",
+    "description": "Beta patch adding configurable auto-save timeout for instance save and inactive tab save, a new Cookie parser table in the REST API core plugin, and improved per-tab response panel state persistence.",
+    "icon": "Cookie",
+    "iconColor": "text-yellow-400",
+    "bgColor": "bg-gradient-to-br from-yellow-900 to-orange-900",
+    "changes": {
+      "Added": [
+        "Auto-save timeout setting now applies to both instance save and inactive tab save",
+        "Cookie parser table in the REST API core plugin — view parsed cookies from responses in a structured table"
+      ],
+      "Improved": [
+        "Individual tab response panel state is now maintained independently per tab"
+      ],
+      "Fixed": [
+        "Instance save and inactive tab save not respecting the configured auto-save timeout"
+      ]
+    }
+  },
+  {
     "version": "v1.3.0-beta.1",
     "date": "05/03/2026",
     "title": "Community Extensions, OAuth2 & Variable Previews",
