@@ -207,6 +207,22 @@ export function ResponsePanelContainer() {
 
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Find the first visible CodeMirror editor in the response panel
+  // (skips editors inside display:none keep-alive cached tabs)
+  const findVisibleCmView = () => {
+    const el = containerRef.current;
+    if (!el) return null;
+    const cmEditors = el.querySelectorAll('.cm-editor');
+    for (const cmEl of cmEditors) {
+      const htmlEl = cmEl as HTMLElement & { cmView?: any };
+      // Skip editors that are hidden (inside display:none keep-alive containers)
+      if (htmlEl.offsetParent === null) continue;
+      const view = htmlEl.cmView;
+      if (view && typeof view.focus === 'function') return view;
+    }
+    return null;
+  };
+
   // Intercept Cmd+F / Ctrl+F to open CodeMirror search panel in response viewer
   useEffect(() => {
     const el = containerRef.current;
@@ -214,21 +230,14 @@ export function ResponsePanelContainer() {
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
-        // Find the first visible CodeMirror editor in the response panel
-        const cmEditors = el.querySelectorAll('.cm-editor');
-        for (const cmEl of cmEditors) {
-          const htmlEl = cmEl as HTMLElement & { cmView?: any };
-          // cmView is set by our CodeEditor component's onCreateEditor
-          const view = htmlEl.cmView;
-          if (view && typeof view.focus === 'function') {
-            e.preventDefault();
-            e.stopPropagation();
-            view.focus();
-            import('@codemirror/search').then(({ openSearchPanel }) => {
-              openSearchPanel(view);
-            });
-            return;
-          }
+        const view = findVisibleCmView();
+        if (view) {
+          e.preventDefault();
+          e.stopPropagation();
+          view.focus();
+          import('@codemirror/search').then(({ openSearchPanel }) => {
+            openSearchPanel(view);
+          });
         }
       }
     };
@@ -315,19 +324,12 @@ export function ResponsePanelContainer() {
               className="p-1.5 text-comment hover:text-text transition-colors rounded"
               title="Find (⌘F)"
               onClick={() => {
-                const el = containerRef.current;
-                if (!el) return;
-                const cmEditors = el.querySelectorAll('.cm-editor');
-                for (const cmEl of cmEditors) {
-                  const htmlEl = cmEl as HTMLElement & { cmView?: any };
-                  const view = htmlEl.cmView;
-                  if (view && typeof view.focus === 'function') {
-                    view.focus();
-                    import('@codemirror/search').then(({ openSearchPanel }) => {
-                      openSearchPanel(view);
-                    });
-                    return;
-                  }
+                const view = findVisibleCmView();
+                if (view) {
+                  view.focus();
+                  import('@codemirror/search').then(({ openSearchPanel }) => {
+                    openSearchPanel(view);
+                  });
                 }
               }}
             >

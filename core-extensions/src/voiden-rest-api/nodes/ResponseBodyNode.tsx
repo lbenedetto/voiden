@@ -61,19 +61,30 @@ type ViewMode = "preview" | "raw";
 export const createResponseBodyNode = (
   NodeViewWrapper: any,
   CodeEditor: any,
-  useParentResponseDoc: (editor: any, getPos: () => number) => { openNodes: string[]; parentPos: number | null }
+  useParentResponseDoc: (editor: any, getPos: () => number) => { openNodes: string[]; parentPos: number | null },
+  useResponseBodyHeight: () => { height: number | null; setHeight: (h: number) => void }
 ) => {
   const ResponseBodyComponent = ({ node, getPos, editor }: any) => {
     const { body, contentType, downloadFilename } = node.attrs as ResponseBodyAttrs;
     const [viewMode, setViewMode] = React.useState<ViewMode>("preview");
     const [isPrettified, setIsPrettified] = React.useState(false);
 
+    // Persisted height from the response store (per-tab)
+    const { height: persistedHeight, setHeight: persistHeight } = useResponseBodyHeight();
+
     // Resize state for the response body code editor (must be at top level)
     const defaultHeight = Math.min(window.innerHeight * 0.6, 500);
-    const [editorHeight, setEditorHeight] = React.useState(defaultHeight);
+    const [editorHeight, setEditorHeight] = React.useState(persistedHeight ?? defaultHeight);
     const isResizingRef = React.useRef(false);
     const startYRef = React.useRef(0);
     const startHeightRef = React.useRef(0);
+
+    // Sync local height when persisted height changes (e.g. tab switch)
+    React.useEffect(() => {
+      if (persistedHeight != null) {
+        setEditorHeight(persistedHeight);
+      }
+    }, [persistedHeight]);
 
     // Read parent's openNodes state - automatically updates when parent changes
     const { openNodes } = useParentResponseDoc(editor, getPos);
@@ -456,15 +467,18 @@ export const createResponseBodyNode = (
         startYRef.current = e.clientY;
         startHeightRef.current = editorHeight;
 
+        let latestHeight = startHeightRef.current;
+
         const onMouseMove = (ev: MouseEvent) => {
           if (!isResizingRef.current) return;
           const delta = ev.clientY - startYRef.current;
-          const newHeight = Math.max(100, startHeightRef.current + delta);
-          setEditorHeight(newHeight);
+          latestHeight = Math.max(100, startHeightRef.current + delta);
+          setEditorHeight(latestHeight);
         };
 
         const onMouseUp = () => {
           isResizingRef.current = false;
+          persistHeight(latestHeight);
           document.removeEventListener('mousemove', onMouseMove);
           document.removeEventListener('mouseup', onMouseUp);
           document.body.style.cursor = '';

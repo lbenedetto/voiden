@@ -6,6 +6,7 @@ export type ResponseNodeType =
   | "response-headers"
   | "request-headers"
   | "request-headers-security"
+  | "request-body-sent"
   | "assertion-results"
   | "openapi-validation-results"
   | "script-assertion-results"
@@ -43,6 +44,9 @@ interface ResponseStore {
 
   /** Inner code-scroller positions per response node, grouped by tab */
   responseNodeScrollByTab: Record<string, Record<string, number>>;
+
+  /** Response body editor height per tab (set via drag-resize) */
+  responseBodyHeightByTab: Record<string, number>;
 
   /** Set response content for a specific tab */
   setResponse: (tabId: string, doc: any, markdown: string | null) => void;
@@ -90,6 +94,12 @@ interface ResponseStore {
 
   /** Read inner response-node scroll map for a tab */
   getResponseNodeScrollsForTab: (tabId: string) => Record<string, number>;
+
+  /** Persist response body editor height per tab */
+  setResponseBodyHeightForTab: (tabId: string, height: number) => void;
+
+  /** Read response body editor height for a tab */
+  getResponseBodyHeightForTab: (tabId: string) => number | null;
 }
 
 export const useResponseStore = create<ResponseStore>()(
@@ -102,6 +112,7 @@ export const useResponseStore = create<ResponseStore>()(
       activeResponseNodeByTab: {},
       responsePanelScrollByTab: {},
       responseNodeScrollByTab: {},
+      responseBodyHeightByTab: {},
 
       setResponse: (tabId, doc, markdown) => set((state) => ({
         responses: {
@@ -220,6 +231,19 @@ export const useResponseStore = create<ResponseStore>()(
         const state = get();
         return state.responseNodeScrollByTab[tabId] || {};
       },
+
+      setResponseBodyHeightForTab: (tabId, height) =>
+        set((state) => ({
+          responseBodyHeightByTab: {
+            ...state.responseBodyHeightByTab,
+            [tabId]: height,
+          },
+        })),
+
+      getResponseBodyHeightForTab: (tabId) => {
+        const state = get();
+        return state.responseBodyHeightByTab[tabId] ?? null;
+      },
     }),
     {
       name: "response-store-v2",
@@ -227,6 +251,7 @@ export const useResponseStore = create<ResponseStore>()(
         activeResponseNodeByTab: state.activeResponseNodeByTab,
         responsePanelScrollByTab: state.responsePanelScrollByTab,
         responseNodeScrollByTab: state.responseNodeScrollByTab,
+        responseBodyHeightByTab: state.responseBodyHeightByTab,
       }),
     },
   ),

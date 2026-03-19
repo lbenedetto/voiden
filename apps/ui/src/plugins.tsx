@@ -39,6 +39,7 @@ import { NodeViewWrapper } from "@tiptap/react";
 import { useSendRestRequest } from "@/core/request-engine";
 import { RequestBlockHeader } from "@/core/editors/voiden/nodes/RequestBlockHeader";
 import { useParentResponseDoc } from "@/core/extensions/hooks/useParentResponseDoc";
+import { useResponseBodyHeight } from "@/core/extensions/hooks/useResponseBodyHeight";
 import { toast } from "sonner";
 import { HistoryEntry } from "@/core/history/types";
 import { buildCurlFromEntry } from "@/core/history/historyManager";
@@ -540,6 +541,7 @@ export const createPlugin = (pluginModule: (context: PluginContext) => Plugin, e
       hooks: {
         useSendRestRequest,
         useParentResponseDoc,
+        useResponseBodyHeight,
       },
       showToast: (message: string, type?: 'info' | 'success' | 'warning' | 'error') => {
         if (type) {

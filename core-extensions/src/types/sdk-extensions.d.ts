@@ -9,5 +9,9 @@ declare module "@voiden/sdk/ui" {
       openNodes: string[];
       parentPos: number | null;
     };
+    useResponseBodyHeight: () => {
+      height: number | null;
+      setHeight: (h: number) => void;
+    };
   }
 }

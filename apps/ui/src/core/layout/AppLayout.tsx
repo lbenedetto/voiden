@@ -362,11 +362,13 @@ export const AppLayout = () => {
 
   useElectronEvent("menu:find", () => {
     // Trigger find in the active editor
-    // This could be enhanced to focus find input if it exists
-    document.dispatchEvent(new KeyboardEvent('keydown', {
+    // Dispatch on body (not document) so e.target has .closest()
+    const target = (document.activeElement as HTMLElement) || document.body;
+    target.dispatchEvent(new KeyboardEvent('keydown', {
       key: 'f',
       metaKey: true,
-      ctrlKey: true
+      ctrlKey: true,
+      bubbles: true,
     }));
   });
 

@@ -142,8 +142,6 @@ export function convertResponseToVoidenDoc(response: HttpResponse): any {
 
   // Add assertion results if present (inject after body)
   if (response.metadata?.assertionResults) {
-    console.log('[Response Converter] ✓ Found assertion results, injecting into response doc');
-    console.log('[Response Converter] Assertion results:', response.metadata.assertionResults);
     responseDocContent.push({
       type: 'assertion-results',
       attrs: {
@@ -153,14 +151,10 @@ export function convertResponseToVoidenDoc(response: HttpResponse): any {
         failedAssertions: response.metadata.assertionResults.failedAssertions,
       },
     });
-  } else {
-    console.log('[Response Converter] No assertion results in response.metadata');
   }
 
   // Add OpenAPI Spec result check if present
   if (response.metadata?.openAPIValidation) {
-    console.log('[Response Converter] ✓ Found OpenAPI validation results, injecting into response doc');
-    console.log('[Response Converter] OpenAPI validation:', response.metadata.openAPIValidation);
     responseDocContent.push({
       type: 'openapi-validation-results',
       attrs: {
@@ -172,8 +166,6 @@ export function convertResponseToVoidenDoc(response: HttpResponse): any {
         totalWarnings: response.metadata.openAPIValidation.warnings.length,
       },
     });
-  } else {
-    console.log('[Response Converter] No OpenAPI validation results in response.metadata');
   }
 
   // Add script assertion results if present
@@ -183,7 +175,6 @@ export function convertResponseToVoidenDoc(response: HttpResponse): any {
     response.metadata?.scriptAssertions;
 
   if (scriptAssertions) {
-    console.log('[Response Converter] ✓ Found script assertion results, injecting into response doc');
     responseDocContent.push({
       type: 'script-assertion-results',
       attrs: {
@@ -193,8 +184,6 @@ export function convertResponseToVoidenDoc(response: HttpResponse): any {
         failedAssertions: scriptAssertions.failedAssertions ?? (scriptAssertions.results || []).filter((r: any) => !r?.passed).length,
       },
     });
-  } else {
-    console.log('[Response Converter] No script assertion results in response.metadata');
   }
 
   // Add response headers and request info
@@ -226,6 +215,7 @@ export function convertResponseToVoidenDoc(response: HttpResponse): any {
         'response-headers',
         'request-headers',
         'request-headers-security',
+        'request-body-sent',
         'assertion-results',
         'openapi-validation-results',
         'script-assertion-results',

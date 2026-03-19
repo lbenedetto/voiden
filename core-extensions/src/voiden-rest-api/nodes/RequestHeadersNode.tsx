@@ -418,7 +418,11 @@ export const createRequestHeadersNode = (NodeViewWrapper: any, CodeEditor: any, 
     openNodes: string[];
     editor: any;
   }) => {
-    const isCollapsed = !openNodes.includes("request-headers");
+    const isCollapsed = !openNodes.includes("request-body-sent");
+
+    const handleToggle = () => {
+      ed.commands.toggleResponseNode("request-body-sent");
+    };
 
     const handleCopyBody = async () => {
       try {
@@ -454,6 +458,7 @@ export const createRequestHeadersNode = (NodeViewWrapper: any, CodeEditor: any, 
         <div
           className={`flex items-center justify-between ${!isCollapsed ? "bg-panel" : "bg-bg"} hover:bg-panel border-b border-border px-2 py-1.5 header-bar`}
           style={{ cursor: "pointer", userSelect: "none" }}
+          onClick={handleToggle}
         >
           <div className="flex items-center gap-2">
             <svg
