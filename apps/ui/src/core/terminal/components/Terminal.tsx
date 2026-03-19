@@ -5,6 +5,8 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { useSettings } from "../../settings/hooks/useSettings";
 import { useNerdFont } from "../hooks/useNerdFont";
+import { useClosePanelTab, useGetPanelTabs } from "@/core/layout/hooks";
+import { usePanelStore } from "@/core/stores/panelStore";
 
 interface TerminalProps {
   tabId: string;
@@ -16,6 +18,14 @@ const getCssVar = (name: string) => getComputedStyle(document.documentElement).g
 export const Terminal = ({ tabId, cwd }: TerminalProps) => {
   const { settings } = useSettings();
   const { fontFamily } = useNerdFont();
+  const { mutate: closeTab } = useClosePanelTab();
+  const { data: bottomTabs } = useGetPanelTabs("bottom");
+  const isLastTabRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    isLastTabRef.current = (bottomTabs?.tabs?.length ?? 0) <= 1;
+  }, [bottomTabs]);
+
   const terminalRef = useRef<HTMLDivElement>(null);
   const fitAddonRef = useRef<FitAddon>();
   const xtermRef = useRef<XTerm | null>(null);
@@ -24,10 +34,6 @@ export const Terminal = ({ tabId, cwd }: TerminalProps) => {
   // Throttling for terminal output
   const outputBufferRef = useRef<string>("");
   const writeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [exitInfo, setExitInfo] = useState<{ code: number | null; signal: number | null }>({
-    code: null,
-    signal: null,
-  });
 
   // Get font size from settings, fallback to 14
   const fontSize = settings?.appearance?.font_size || 14;
@@ -108,7 +114,7 @@ export const Terminal = ({ tabId, cwd }: TerminalProps) => {
   // Update terminal font family when Nerd Font is loaded or unloaded
   useEffect(() => {
     if (xtermRef.current) {
-      xtermRef.current.options.fontFamily = fontFamily || "'SF Mono', 'Monaco', 'Menlo', 'Consolas', 'Cascadia Mono', 'DejaVu Sans Mono', 'Liberation Mono', 'Courier New', monospace";
+      xtermRef.current.options.fontFamily = fontFamily || "'Geist Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace";
       // Debounced fit to prevent excessive re-renders
       debouncedFit();
     }
@@ -132,7 +138,8 @@ export const Terminal = ({ tabId, cwd }: TerminalProps) => {
             // Base colors
             background: getCssVar("--editor-bg"),
             foreground: getCssVar("--editor-fg"),
-            cursor: getCssVar("--editor-fg"),
+            cursor: getCssVar("--accent") || getCssVar("--editor-fg"),
+            cursorAccent: getCssVar("--editor-bg"),
             selectionBackground: getCssVar("--editor-selection"),
 
             // ANSI colors from theme
@@ -184,7 +191,8 @@ export const Terminal = ({ tabId, cwd }: TerminalProps) => {
         // Base colors
         background: getCssVar("--editor-bg"),
         foreground: getCssVar("--editor-fg"),
-        cursor: getCssVar("--editor-fg"),
+        cursor: getCssVar("--accent") || getCssVar("--editor-fg"),
+        cursorAccent: getCssVar("--editor-bg"),
         selectionBackground: getCssVar("--editor-selection"),
 
         // ANSI colors from theme
@@ -208,23 +216,25 @@ export const Terminal = ({ tabId, cwd }: TerminalProps) => {
         brightWhite: getCssVar("--ansi-bright-white"),
       },
       fontSize: fontSize,
-      fontFamily: fontFamily || "'SF Mono', 'Monaco', 'Menlo', 'Consolas', 'Cascadia Mono', 'DejaVu Sans Mono', 'Liberation Mono', 'Courier New', monospace",
-      fontWeight: "normal",
-      fontWeightBold: "bold",
+      fontFamily: fontFamily || "'Geist Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace",
+      fontWeight: "400",
+      fontWeightBold: "600",
+      lineHeight: 1.3,
+      letterSpacing: 0.3,
       cursorBlink: true,
+      cursorStyle: "bar",
+      cursorWidth: 2,
       allowProposedApi: true,
       allowTransparency: false,
       drawBoldTextInBrightColors: true,
-      // Performance optimizations
-      scrollback: 5000, // Reduced scrollback buffer to prevent memory bloat
-      fastScrollModifier: "shift", // Enable fast scroll
+      rescaleOverlappingGlyphs: true,
+      scrollback: 5000,
+      fastScrollModifier: "shift",
       fastScrollSensitivity: 5,
+      smoothScrollDuration: 80,
       windowOptions: {
         setWinLines: false,
       },
-      // Additional performance settings
-      smoothScrollDuration: 0, // Disable smooth scrolling for better performance
-      rescaleOverlappingGlyphs: false, // Disable expensive glyph rescaling
       disableStdin: false, // ← Important: must be false for mouse to work
     });
 
@@ -342,11 +352,14 @@ export const Terminal = ({ tabId, cwd }: TerminalProps) => {
       sessionIdRef.current = id;
 
 
-      // Subscribe to exit events
-      const unsubscribeExit = window.electron?.terminal.onExit(id, ({ exitCode, signal }: any) => {
-        setExitInfo({ code: exitCode, signal });
-        xterm.writeln(`\r\n\r\n[Process exited with code ${exitCode}]`);
-        xterm.blur(); // visually show that the terminal is not active
+      // Subscribe to exit events — close the tab automatically on process exit
+      const unsubscribeExit = window.electron?.terminal.onExit(id, (_: any) => {
+        closeTab({ panelId: "bottom", tabId });
+        if (isLastTabRef.current) {
+          const { bottomPanelRef: panelRef, closeBottomPanel } = usePanelStore.getState();
+          panelRef?.current?.collapse();
+          closeBottomPanel();
+        }
       });
       if (unsubscribeExit) {
         cleanupFunctionsRef.current.push(unsubscribeExit);
@@ -623,7 +636,7 @@ export const Terminal = ({ tabId, cwd }: TerminalProps) => {
   }, []);
 
   return (
-    <div className="h-full w-full p-2 bg-editor">
+    <div className="h-full w-full bg-editor" style={{ padding: '10px 14px 10px 14px' }}>
       <div ref={terminalRef} className="h-full w-full" onContextMenu={handleContextMenu} onMouseUp={handleMouseUp} />
 
       {/* Context Menu */}
@@ -668,11 +681,6 @@ export const Terminal = ({ tabId, cwd }: TerminalProps) => {
               </button>
             );
           })}
-        </div>
-      )}
-      {exitInfo.code !== null && (
-        <div className="text-xs text-gray-400 mt-2">
-          Process exited with code {exitInfo.code}. Close tab or restart the terminal.
         </div>
       )}
     </div>

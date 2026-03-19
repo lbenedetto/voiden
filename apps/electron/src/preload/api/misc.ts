@@ -1,4 +1,4 @@
-import { ipcMain, ipcRenderer } from "electron";
+import { ipcRenderer } from "electron";
 import { Tab } from "../../shared/types";
 import type { Settings } from "../../main/settings";
 import { connect } from "http2";
@@ -17,6 +17,8 @@ export const directoriesApi = {
 
 export const dialogApi = {
   openFile: (options: Electron.OpenDialogOptions) => ipcRenderer.invoke("dialog:openFile", options),
+  showMessageBox: (options: Electron.MessageBoxOptions): Promise<number> =>
+    ipcRenderer.invoke("dialog:showMessageBox", options),
 };
 
 export const editorApi = {
@@ -55,6 +57,7 @@ export const sidebarApi = {
       title: string;
     },
   ) => ipcRenderer.invoke("sidebar:registerSidebarTab", sidebarId, tab),
+  setHistoryEnabled: (enabled: boolean) => ipcRenderer.invoke("sidebar:setHistoryEnabled", enabled),
 };
 
 export const settingsApi = {
@@ -184,6 +187,13 @@ export const cliApi = {
   install: (): Promise<{ success: boolean; message: string }> => ipcRenderer.invoke("cli:install"),
   uninstall: (): Promise<{ success: boolean; message: string }> => ipcRenderer.invoke("cli:uninstall"),
   showInstructions: (): Promise<void> => ipcRenderer.invoke("cli:showInstructions"),
+};
+
+export const skillsApi = {
+  setClaude: (enabled: boolean): Promise<{ success: boolean; message?: string }> =>
+    ipcRenderer.invoke("skills:setClaude", enabled),
+  setCodex: (enabled: boolean): Promise<{ success: boolean; message?: string }> =>
+    ipcRenderer.invoke("skills:setCodex", enabled),
 };
 
 export const variablesApi = {

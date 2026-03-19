@@ -22,6 +22,7 @@ export const insertSocketNode = (editor: any, type: "wss" | "grpcs") => {
     const content: any[] = [
       {
         type: "smethod",
+        attrs: { method: config.method },
         content: [{ type: "text", text: config.method }]
       },
       {
