@@ -171,13 +171,15 @@ export const Terminal = ({ tabId, cwd }: TerminalProps) => {
       observer.observe(document.documentElement, {
         attributes: true,
         attributeFilter: ['class', 'style']
-      })
+      });
       // Use requestIdleCallback if available to update theme during idle time
       if ('requestIdleCallback' in window) {
         (window as any).requestIdleCallback(updateTheme, { timeout: 100 });
       } else {
         updateTheme();
       }
+
+      return () => observer.disconnect();
     }
   }, [settings?.appearance?.theme]);
   const isMouseDownRef = useRef(false);
@@ -231,7 +233,7 @@ export const Terminal = ({ tabId, cwd }: TerminalProps) => {
       scrollback: 5000,
       fastScrollModifier: "shift",
       fastScrollSensitivity: 5,
-      smoothScrollDuration: 80,
+      smoothScrollDuration: 0,
       windowOptions: {
         setWinLines: false,
       },
@@ -599,41 +601,6 @@ export const Terminal = ({ tabId, cwd }: TerminalProps) => {
     };
   }, []);
 
-  // Keep the terminal resized correctly with throttling.
-  useEffect(() => {
-    let resizeTimeout: NodeJS.Timeout | null = null;
-
-    const resizeObserver = new ResizeObserver(() => {
-      // Throttle resize operations to prevent excessive calls
-      if (resizeTimeout) {
-        clearTimeout(resizeTimeout);
-      }
-
-      resizeTimeout = setTimeout(() => {
-        if (fitAddonRef.current && xtermRef.current) {
-          fitAddonRef.current.fit();
-          // Sync dimensions with PTY after resize
-          if (sessionIdRef.current) {
-            const { cols, rows } = xtermRef.current;
-            if (cols && rows) {
-              window.electron?.terminal.resize?.({ id: sessionIdRef.current, cols, rows });
-            }
-          }
-        }
-      }, 100); // Throttle resize to max once per 100ms
-    });
-
-    if (terminalRef.current) {
-      resizeObserver.observe(terminalRef.current);
-    }
-
-    return () => {
-      if (resizeTimeout) {
-        clearTimeout(resizeTimeout);
-      }
-      resizeObserver.disconnect();
-    };
-  }, []);
 
   return (
     <div className="h-full w-full bg-editor" style={{ padding: '10px 14px 10px 14px' }}>
