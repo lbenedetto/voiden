@@ -2,8 +2,8 @@
   {
     "version": "v1.3.5",
     "date": "19/03/2026",
-    "title": "History Tracking, Shell Scripting & Bug Fixes",
-    "description": "Patch release introducing request history tracking with replay, shell scripting support for pre/post scripts, full Git workflow in GitUI, and a customizable data directory — alongside fixes for context menu layering, variable replacement, terminal cleanup, and response download naming.",
+    "title": "History, Scripts, AI Skills & Fixes",
+    "description": "Patch release adding request history with replay, shell scripting for pre/post scripts, full Git workflow in GitUI, a customizable data directory, AI agent skill integration for Claude and Codex, a new Iris theme with full theme-aware syntax highlighting, and fixes for context menus, variable replacement, terminal cleanup, and response downloads.",
     "icon": "Wrench",
     "iconColor": "text-blue-400",
     "bgColor": "bg-gradient-to-br from-blue-900 to-slate-900",
@@ -12,7 +12,20 @@
         "Request history tracking with configurable retention and replay per .void file",
         "Shell scripting support for pre and post request scripts",
         "Expanded GitUI to support a full Git workflow",
-        "Customizable data directory for storing Voiden project files"
+        "Customizable data directory for storing Voiden project files",
+        "New Iris theme — a cool blue-gray light theme with magenta accent and crimson string syntax",
+        "Theme picker updated to support the full new theme list including Iris",
+        "Memory and CPU usage now visible in the status bar — real-time process footprint at a glance",
+        "Voiden skill integration for Claude and Codex AI agents — AI agents can now understand and work with .void files, request blocks, and the Voiden plugin system natively"
+      ],
+      "Improved": [
+        "Rewrote all 5 themes (voiden, voiden-light, dracula, nord, tokyo-night) with a simplified, consistent 45-variable system replacing the old fragmented structure",
+        "Syntax highlighting now properly connected to themes — CodeEditor and extensions use var(--syntax-*) CSS variables instead of hardcoded colors",
+        "Full theme-aware CodeMirror setup — editor background, gutter, selection, and all syntax tokens pull from CSS variables",
+        "Void block borders replaced with subtle theme-aware borders via --border, removing harsh white outlines",
+        "Major styles.css rework — cleaned up CSS variable aliases and fixed --ui-line / --border resolution chain",
+        "Fixed -webkit-font-smoothing antialiasing conflict causing incorrect font rendering",
+        "Tuned font weights and rendering across light and dark themes"
       ],
       "Fixed": [
         "Basic blocks context menu appearing on top of the About Voiden popup",

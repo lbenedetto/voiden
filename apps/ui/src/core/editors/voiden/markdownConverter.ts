@@ -390,6 +390,17 @@ const processCubeBlockText = (text: string, schema: any): JSONContent => {
   // Recursively inflate the node (for both tables and collapsed text).
   nodeJson = inflateSimplifiedNode(nodeJson);
 
+  // If the node is an inline type (e.g. fileLink), wrap it in a paragraph
+  // so it's valid as a direct child of doc (which requires block content).
+  const nodeType = schema.nodes[nodeJson.type];
+  const isBlock = nodeType?.spec?.group?.includes("block") || nodeType?.spec?.isBlock;
+  if (nodeType && !isBlock) {
+    return {
+      type: "paragraph",
+      content: [nodeJson],
+    };
+  }
+
   return nodeJson;
 };
 
