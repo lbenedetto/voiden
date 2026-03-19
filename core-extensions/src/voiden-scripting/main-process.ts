@@ -412,6 +412,7 @@ export default function createVoidenScriptingMainPlugin(
             const child = spawn("bash", [scriptFile], {
               stdio: ["ignore", "ignore", "pipe"],
               cwd: projectPath || undefined,
+              env: { ...process.env, PATH: EXTENDED_PATH },
             });
             child.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
 
