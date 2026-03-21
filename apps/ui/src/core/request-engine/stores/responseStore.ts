@@ -12,26 +12,41 @@ export type ResponseNodeType =
   | "script-assertion-results"
   | "";
 
-interface TabResponse {
+interface SectionResponse {
   /** Response document (Voiden JSON) */
   responseDoc: any;
 
   /** Markdown representation of response */
   responseMarkdown: string | null;
 
-  /** Error state for this tab */
+  /** Error state for this section */
   error: string | null;
 }
 
+/** Legacy single-response format (for backward compat) */
+interface TabResponse {
+  responseDoc: any;
+  responseMarkdown: string | null;
+  error: string | null;
+}
+
+/**
+ * Responses are stored per tab, per section index.
+ * When a request from section N completes, it's stored at responses[tabId][sectionIndex].
+ * This allows all section responses to be displayed stacked in the response panel.
+ */
 interface ResponseStore {
-  /** Map of tab ID to response data */
-  responses: Record<string, TabResponse>;
+  /** Map of tab ID → section index → response data */
+  responses: Record<string, Record<number, SectionResponse>>;
 
   /** Currently active tab ID for display */
   activeTabId: string | null;
 
   /** Tab ID of the currently executing request (to associate response with correct tab) */
   currentRequestTabId: string | null;
+
+  /** Section index of the currently executing request */
+  currentRequestSectionIndex: number | null;
 
   /** Loading state (global, since only one request can run at a time) */
   isLoading: boolean;
@@ -45,15 +60,18 @@ interface ResponseStore {
   /** Inner code-scroller positions per response node, grouped by tab */
   responseNodeScrollByTab: Record<string, Record<string, number>>;
 
-  /** Response body editor height per tab (set via drag-resize) */
+  /** Response body editor height per tab */
   responseBodyHeightByTab: Record<string, number>;
 
-  /** Set response content for a specific tab */
+  /** Set response content for a specific tab and section */
   setResponse: (tabId: string, doc: any, markdown: string | null) => void;
   /** Hydrate response content for a tab without mutating loading/request state */
   hydrateResponse: (tabId: string, doc: any, markdown: string | null) => void;
 
-  /** Get response for a specific tab */
+  /** Get all section responses for a tab, sorted by section index */
+  getResponsesForTab: (tabId: string) => Array<{ sectionIndex: number; response: SectionResponse }>;
+
+  /** Get single response (latest or by section) — backward compat */
   getResponse: (tabId: string) => TabResponse | null;
 
   /** Clear response for a specific tab */
@@ -102,45 +120,105 @@ interface ResponseStore {
   getResponseBodyHeightForTab: (tabId: string) => number | null;
 }
 
+/**
+ * Extract section index from a response document.
+ * Falls back to 0 if not found.
+ */
+function extractSectionIndex(doc: any): number {
+  // Check doc-level attrs
+  if (doc?.attrs?.sectionIndex !== undefined) {
+    return doc.attrs.sectionIndex;
+  }
+  // Check inside content for response-doc node
+  if (doc?.content) {
+    for (const node of doc.content) {
+      if (node.type === "response-doc" && node.attrs?.sectionIndex !== undefined) {
+        return node.attrs.sectionIndex;
+      }
+    }
+  }
+  return 0;
+}
+
+/**
+ * Get the "latest" response for a tab — the most recently updated section.
+ * Used for backward-compat APIs that expect a single response.
+ */
+function getLatestResponse(sections: Record<number, SectionResponse>): SectionResponse | null {
+  const keys = Object.keys(sections).map(Number);
+  if (keys.length === 0) return null;
+  // Return the response with the highest section index (or just the first)
+  const lastKey = Math.max(...keys);
+  return sections[lastKey] || null;
+}
+
 export const useResponseStore = create<ResponseStore>()(
   persist(
     (set, get) => ({
       responses: {},
       activeTabId: null,
       currentRequestTabId: null,
+      currentRequestSectionIndex: null,
       isLoading: false,
       activeResponseNodeByTab: {},
       responsePanelScrollByTab: {},
       responseNodeScrollByTab: {},
       responseBodyHeightByTab: {},
 
-      setResponse: (tabId, doc, markdown) => set((state) => ({
-        responses: {
-          ...state.responses,
-          [tabId]: {
-            responseDoc: doc,
-            responseMarkdown: markdown,
-            error: null,
+      setResponse: (tabId, doc, markdown) => {
+        const sectionIndex = extractSectionIndex(doc);
+        set((state) => ({
+          responses: {
+            ...state.responses,
+            [tabId]: {
+              ...(state.responses[tabId] || {}),
+              [sectionIndex]: {
+                responseDoc: doc,
+                responseMarkdown: markdown,
+                error: null,
+              },
+            },
           },
-        },
-        isLoading: false,
-        currentRequestTabId: null, // Clear after response is stored
-      })),
+          isLoading: false,
+          currentRequestTabId: null,
+          currentRequestSectionIndex: null,
+        }));
+      },
 
-      hydrateResponse: (tabId, doc, markdown) => set((state) => ({
-        responses: {
-          ...state.responses,
-          [tabId]: {
-            responseDoc: doc,
-            responseMarkdown: markdown,
-            error: null,
+      hydrateResponse: (tabId, doc, markdown) => {
+        const sectionIndex = extractSectionIndex(doc);
+        set((state) => ({
+          responses: {
+            ...state.responses,
+            [tabId]: {
+              ...(state.responses[tabId] || {}),
+              [sectionIndex]: {
+                responseDoc: doc,
+                responseMarkdown: markdown,
+                error: null,
+              },
+            },
           },
-        },
-      })),
+        }));
+      },
+
+      getResponsesForTab: (tabId) => {
+        const state = get();
+        const sections = state.responses[tabId];
+        if (!sections) return [];
+        return Object.entries(sections)
+          .map(([key, response]) => ({
+            sectionIndex: Number(key),
+            response,
+          }))
+          .sort((a, b) => a.sectionIndex - b.sectionIndex);
+      },
 
       getResponse: (tabId) => {
         const state = get();
-        return state.responses[tabId] || null;
+        const sections = state.responses[tabId];
+        if (!sections) return null;
+        return getLatestResponse(sections);
       },
 
       clearResponse: (tabId) => set((state) => {
@@ -153,6 +231,7 @@ export const useResponseStore = create<ResponseStore>()(
         responses: {},
         isLoading: false,
         currentRequestTabId: null,
+        currentRequestSectionIndex: null,
       }),
 
       setActiveTabId: (tabId) => set({ activeTabId: tabId }),
@@ -166,28 +245,35 @@ export const useResponseStore = create<ResponseStore>()(
 
       setError: (tabId, error) => {
         if (!tabId) {
-          // Global error (no specific tab context)
-          set({ isLoading: false, currentRequestTabId: null });
+          set({ isLoading: false, currentRequestTabId: null, currentRequestSectionIndex: null });
           return;
         }
 
+        // Store error in the currently executing section, or section 0
+        const sectionIndex = get().currentRequestSectionIndex ?? 0;
         set((state) => ({
           responses: {
             ...state.responses,
             [tabId]: {
-              ...(state.responses[tabId] || { responseDoc: null, responseMarkdown: null }),
-              error,
+              ...(state.responses[tabId] || {}),
+              [sectionIndex]: {
+                ...(state.responses[tabId]?.[sectionIndex] || { responseDoc: null, responseMarkdown: null }),
+                error,
+              },
             },
           },
           isLoading: false,
           currentRequestTabId: null,
+          currentRequestSectionIndex: null,
         }));
       },
 
       getCurrentResponse: () => {
         const state = get();
         if (!state.activeTabId) return null;
-        return state.responses[state.activeTabId] || null;
+        const sections = state.responses[state.activeTabId];
+        if (!sections) return null;
+        return getLatestResponse(sections);
       },
 
       setActiveResponseNodeForTab: (tabId, nodeType) =>
@@ -246,7 +332,7 @@ export const useResponseStore = create<ResponseStore>()(
       },
     }),
     {
-      name: "response-store-v2",
+      name: "response-store-v3",
       partialize: (state) => ({
         activeResponseNodeByTab: state.activeResponseNodeByTab,
         responsePanelScrollByTab: state.responsePanelScrollByTab,

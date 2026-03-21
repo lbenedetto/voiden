@@ -12,7 +12,7 @@ import type { ResponseNodeType } from "../stores/responseStore";
 import { SendRequestButton } from "./SendRequestButton";
 import { ResponseViewer } from "./ResponseViewer";
 import { useMemo, useEffect, useCallback, useState, useRef } from "react";
-import { Shield, Search, LocateFixed, ArrowUpIcon, ArrowDownIcon, X } from "lucide-react";
+import { Shield, Search, LocateFixed, ArrowUpIcon, ArrowDownIcon, X, ChevronDown, ChevronRight } from "lucide-react";
 import { useGetPanelTabs } from "@/core/layout/hooks";
 import { parseMarkdown } from "@/core/editors/voiden/markdownConverter";
 import { getSchema } from "@tiptap/core";
@@ -24,6 +24,12 @@ import { unifiedSearchHighlight } from "@/core/editors/voiden/search/cmHighlight
 import type { EditorView as CMEditorView } from "@codemirror/view";
 
 const MAX_CACHED_RESPONSE_VIEWERS = 8;
+
+/** Check if a tab has any section responses */
+function hasAnyResponse(tabSections: Record<number, any> | undefined): boolean {
+  if (!tabSections) return false;
+  return Object.values(tabSections).some((s: any) => s?.responseDoc);
+}
 
 export function ResponsePanelContainer() {
   // Get the active tab from the main panel
@@ -47,6 +53,18 @@ export function ResponsePanelContainer() {
 
   // Keep-alive: ordered list of tab IDs that have a mounted ResponseViewer
   const [cachedResponseTabIds, setCachedResponseTabIds] = useState<string[]>([]);
+
+  // Collapsed state for stacked section responses (keyed by "tabId:sectionIndex")
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const toggleSectionCollapse = useCallback((tabId: string, sectionIndex: number) => {
+    const key = `${tabId}:${sectionIndex}`;
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
 
   // Stable per-tab onActiveNodeChange callbacks — avoids recreating TipTap editors on re-render
   const nodeChangeCallbacksRef = useRef<Record<string, (nodeType: ResponseNodeType) => void>>({});
@@ -93,7 +111,7 @@ export function ResponsePanelContainer() {
   // Guarded per-tab so switching tabs does not re-fetch/re-parse repeatedly.
   useEffect(() => {
     if (!activeTabId || !activeTab || activeTab.type !== "document") return;
-    if (responses[activeTabId]?.responseDoc) return;
+    if (hasAnyResponse(responses[activeTabId])) return;
     if (hydratedFromFileTabIdsRef.current.has(activeTabId)) return;
 
     hydratedFromFileTabIdsRef.current.add(activeTabId);
@@ -125,7 +143,7 @@ export function ResponsePanelContainer() {
 
   // When the active tab receives a response, add it to the keep-alive cache (LRU, max 8)
   useEffect(() => {
-    if (!activeTabId || !responses[activeTabId]?.responseDoc) return;
+    if (!activeTabId || !hasAnyResponse(responses[activeTabId])) return;
     setCachedResponseTabIds((prev) => {
       const without = prev.filter((id) => id !== activeTabId);
       const next = [...without, activeTabId];
@@ -155,10 +173,24 @@ export function ResponsePanelContainer() {
     });
   }, [panelData?.tabs]);
 
-  // Active tab's response data
-  const tabResponse = activeTabId ? responses[activeTabId] : null;
-  const responseDoc = tabResponse?.responseDoc ?? null;
-  const error = tabResponse?.error ?? null;
+  // Active tab's response data — now supports multiple sections per tab
+  const tabSections = activeTabId ? responses[activeTabId] : null;
+  const sectionResponses = useMemo(() => {
+    if (!tabSections) return [];
+    return Object.entries(tabSections)
+      .map(([key, response]) => ({
+        sectionIndex: Number(key),
+        response,
+      }))
+      .sort((a, b) => a.sectionIndex - b.sectionIndex);
+  }, [tabSections]);
+
+  // Latest response (highest section index) for status bar display
+  const latestResponse = sectionResponses.length > 0
+    ? sectionResponses[sectionResponses.length - 1].response
+    : null;
+  const responseDoc = latestResponse?.responseDoc ?? null;
+  const error = latestResponse?.error ?? null;
 
   // Extract status info from response document attrs for top bar
   const statusInfo = useMemo(() => {
@@ -649,32 +681,112 @@ export function ResponsePanelContainer() {
           </div>
         )}
 
-        {/* Keep-alive response viewers — always mounted for cached tabs, shown/hidden via CSS */}
+        {/* Stacked response viewers — one per section, scrollable */}
         <div
-          className="absolute inset-0 overflow-hidden bg-editor"
+          className="absolute inset-0 overflow-y-auto bg-editor"
           style={{
             visibility: showContent ? "visible" : "hidden",
             pointerEvents: showContent ? "auto" : "none",
           }}
         >
-          {cachedResponseTabIds.map((tabId) => (
-            <div
-              key={tabId}
-              className="h-full"
-              style={{ display: tabId === activeTabId ? "block" : "none" }}
-            >
-              <ResponseViewer
-                content={responses[tabId]?.responseDoc}
-                preferredActiveNode={getActiveResponseNodeForTab(tabId)}
-                onActiveNodeChange={getNodeChangeCallback(tabId)}
-                panelScrollTop={getResponsePanelScrollForTab(tabId)}
-                onPanelScrollChange={getPanelScrollCallback(tabId)}
-                nodeScrollPositions={getResponseNodeScrollsForTab(tabId)}
-                onNodeScrollChange={getNodeScrollCallback(tabId)}
-                isActive={tabId === activeTabId}
-              />
-            </div>
-          ))}
+          {cachedResponseTabIds.map((tabId) => {
+            const tabIsActive = tabId === activeTabId;
+            const tabSectionData = responses[tabId];
+            if (!tabSectionData) return null;
+
+            const sections = Object.entries(tabSectionData)
+              .map(([key, resp]) => ({ sectionIndex: Number(key), response: resp }))
+              .filter((s) => s.response?.responseDoc)
+              .sort((a, b) => a.sectionIndex - b.sectionIndex);
+
+            return (
+              <div
+                key={tabId}
+                className="h-full"
+                style={{ display: tabIsActive ? "block" : "none" }}
+              >
+                {sections.length === 1 ? (
+                  // Single response — render without section header (backward compat look)
+                  <ResponseViewer
+                    content={sections[0].response.responseDoc}
+                    preferredActiveNode={getActiveResponseNodeForTab(tabId)}
+                    onActiveNodeChange={getNodeChangeCallback(tabId)}
+                    panelScrollTop={getResponsePanelScrollForTab(tabId)}
+                    onPanelScrollChange={getPanelScrollCallback(tabId)}
+                    nodeScrollPositions={getResponseNodeScrollsForTab(tabId)}
+                    onNodeScrollChange={getNodeScrollCallback(tabId)}
+                    isActive={tabIsActive}
+                  />
+                ) : (
+                  // Multiple responses — stacked with section headers
+                  <div className="flex flex-col">
+                    {sections.map(({ sectionIndex, response }) => {
+                      const doc = response.responseDoc;
+                      const colorIndex = doc?.attrs?.sectionColorIndex ?? sectionIndex;
+                      const label = doc?.attrs?.sectionLabel;
+                      const status = doc?.attrs?.statusCode;
+                      const statusMsg = doc?.attrs?.statusMessage;
+                      const borderColor = getSectionBorderColor(colorIndex);
+
+                      const isCollapsed = collapsedSections.has(`${tabId}:${sectionIndex}`);
+
+                      return (
+                        <div
+                          key={sectionIndex}
+                          style={{ borderLeft: `3px solid ${borderColor}` }}
+                        >
+                          {/* Section header — clickable to collapse/expand */}
+                          <div
+                            className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-bg cursor-pointer hover:bg-active transition-colors select-none"
+                            style={{ borderLeftColor: borderColor }}
+                            onClick={() => toggleSectionCollapse(tabId, sectionIndex)}
+                          >
+                            {isCollapsed
+                              ? <ChevronRight size={14} className="text-comment flex-shrink-0" />
+                              : <ChevronDown size={14} className="text-comment flex-shrink-0" />
+                            }
+                            <div
+                              className="size-2 rounded-full flex-shrink-0"
+                              style={{
+                                backgroundColor: status >= 200 && status < 300
+                                  ? "var(--success, #4ade80)"
+                                  : status >= 400
+                                  ? "var(--error, #f87171)"
+                                  : "var(--warning, #facc15)",
+                              }}
+                            />
+                            <span className="font-mono text-xs font-bold">
+                              {status} {statusMsg}
+                            </span>
+                            {label && label !== "New Request" && (
+                              <span
+                                className="text-xs font-semibold uppercase"
+                                style={{ color: borderColor, letterSpacing: "0.5px" }}
+                              >
+                                {label}
+                              </span>
+                            )}
+                            <span className="text-comment text-xs truncate">
+                              {doc?.attrs?.url}
+                            </span>
+                          </div>
+                          {/* Response content — hidden when collapsed */}
+                          {!isCollapsed && (
+                            <ResponseViewer
+                              content={doc}
+                              preferredActiveNode={getActiveResponseNodeForTab(tabId)}
+                              onActiveNodeChange={getNodeChangeCallback(tabId)}
+                              isActive={tabIsActive}
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
