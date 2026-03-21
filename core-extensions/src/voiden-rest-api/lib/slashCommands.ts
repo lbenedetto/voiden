@@ -6,6 +6,25 @@
 
 import { SlashCommandGroup } from '@voiden/sdk';
 import { insertRequestTableNode } from './utils';
+import { getSectionNodesAtPos } from './sectionUtils';
+
+/**
+ * Check if a node type exists in the current section (between request-separator nodes).
+ * Falls back to global search if no separators exist.
+ */
+function findExistingNodeInSection(editor: any, nodeType: string): any | null {
+  const doc = editor.state.doc;
+  const cursorPos = editor.state.selection.$from.pos;
+  const sectionNodes = getSectionNodesAtPos(doc, cursorPos);
+
+  // Check if this node type exists in the current section
+  const existsInSection = sectionNodes.some((node: any) => node.type.name === nodeType);
+  if (!existsInSection) return null;
+
+  // Find the actual node instance in the current section
+  const allNodes = editor.$nodes(nodeType);
+  return allNodes?.find((node: any) => !node.attributes.importedFrom) || null;
+}
 
 export const restApiSlashGroup: SlashCommandGroup = {
   name: "http",
@@ -138,8 +157,7 @@ export const restApiSlashGroup: SlashCommandGroup = {
           from: editor.state.selection.$from.pos,
           to: editor.state.selection.$to.pos,
         };
-        const existingNodes = editor.$nodes("json_body");
-        const existingNode = existingNodes?.find((node) => !node.attributes.importedFrom);
+        const existingNode = findExistingNodeInSection(editor, "json_body");
         if (existingNode) {
           editor.chain().focus(existingNode.pos).deleteRange(range).run();
         } else {
@@ -166,8 +184,7 @@ export const restApiSlashGroup: SlashCommandGroup = {
           from: editor.state.selection.$from.pos,
           to: editor.state.selection.$to.pos,
         };
-        const existingNodes = editor.$nodes("xml_body");
-        const existingNode = existingNodes?.find((node) => !node.attributes.importedFrom);
+        const existingNode = findExistingNodeInSection(editor, "xml_body");
         if (existingNode) {
           editor.chain().focus(existingNode.pos).deleteRange(range).run();
         } else {
@@ -194,8 +211,7 @@ export const restApiSlashGroup: SlashCommandGroup = {
           from: editor.state.selection.$from.pos,
           to: editor.state.selection.$to.pos,
         };
-        const existingNodes = editor.$nodes("yml_body");
-        const existingNode = existingNodes?.find((node) => !node.attributes.importedFrom);
+        const existingNode = findExistingNodeInSection(editor, "yml_body");
         if (existingNode) {
           editor.chain().focus(existingNode.pos).deleteRange(range).run();
         } else {

@@ -27,6 +27,7 @@ import { cmdEnter } from "./extensions/cmdEnter";
 import { PasteHandler } from "./extensions/pasteHandler";
 import { SeamlessNavigation } from "./extensions/seamlessNavigation";
 import { cmdAll } from "./extensions/cmdAll";
+import { RequestSeparatorNode } from "./nodes/RequestSeparatorNode";
 
 // Extension to prevent markdown input rules in table cells
 const DisableMarkdownInTables = Extension.create({
@@ -204,6 +205,7 @@ export const voidenExtensions: AnyExtension[] = [
   PasteHandler,
   SeamlessNavigation,
   VariableCapture,
+  RequestSeparatorNode,
   Link.configure({
     openOnClick: false, // Disable default click handler
     linkOnPaste: false, // disable default link-on-paste behavior

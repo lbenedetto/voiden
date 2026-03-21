@@ -290,9 +290,11 @@ export async function sendRequestHybrid(
 
   try {
     let requestState = request;
+    console.log('[sendRequestHybrid] input method:', request.method, 'protocolType:', request.protocolType);
     // Convert Request to RestApiRequestState
     if (request.protocolType === 'rest') {
       requestState =await  convertToRestApiRequestState(request);
+      console.log('[sendRequestHybrid] after convert method:', requestState.method);
     }
 
     const url = requestState.url.toLowerCase();
@@ -353,6 +355,9 @@ export async function sendRequestHybrid(
     // ========================================
     // ELECTRON PROCESS - Stages 3, 4, 6, 7
     // ========================================
+
+    // Debug: log method before sending to Electron
+    console.log('[sendRequestHybrid] method before Electron:', requestState.method, 'url:', requestState.url);
 
     // Send to Electron for secure processing
     const electronResponse = await window.electron.request.sendSecure(

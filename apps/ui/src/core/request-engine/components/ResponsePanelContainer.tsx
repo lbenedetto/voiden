@@ -12,7 +12,7 @@ import type { ResponseNodeType } from "../stores/responseStore";
 import { SendRequestButton } from "./SendRequestButton";
 import { ResponseViewer } from "./ResponseViewer";
 import { useMemo, useEffect, useCallback, useState, useRef } from "react";
-import { Shield, Search } from "lucide-react";
+import { Shield, Search, LocateFixed } from "lucide-react";
 import { useGetPanelTabs } from "@/core/layout/hooks";
 import { parseMarkdown } from "@/core/editors/voiden/markdownConverter";
 import { getSchema } from "@tiptap/core";
@@ -167,6 +167,7 @@ export function ResponsePanelContainer() {
       url: responseDoc.attrs.url,
       requestMeta: responseDoc.attrs.requestMeta,
       protocol: responseDoc.attrs.protocol,
+      sectionIndex: responseDoc.attrs.sectionIndex,
     };
   }, [responseDoc]);
 
@@ -319,6 +320,21 @@ export function ResponsePanelContainer() {
             )}
         </div>
         <div className="flex items-center gap-1">
+          {showContent && statusInfo?.sectionIndex !== undefined && (
+            <button
+              className="p-1.5 text-comment hover:text-text transition-colors rounded"
+              title="Scroll to request"
+              onClick={() => {
+                window.dispatchEvent(
+                  new CustomEvent("voiden:scroll-to-section", {
+                    detail: { sectionIndex: statusInfo.sectionIndex },
+                  })
+                );
+              }}
+            >
+              <LocateFixed size={14} />
+            </button>
+          )}
           {showContent && (
             <button
               className="p-1.5 text-comment hover:text-text transition-colors rounded"

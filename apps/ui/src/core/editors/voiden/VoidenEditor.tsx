@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState, useEffect, useRef, useLayoutEffect, memo } from "react";
 import { AnyExtension, Editor, EditorContent, Extension, getSchema, useEditor } from "@tiptap/react";
-import { Plugin, PluginKey } from "prosemirror-state";
+import { Plugin, PluginKey, TextSelection } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 import { useVoidVariableData } from "@/core/runtimeVariables/hook/useVariableCapture.tsx";
 // Escape user input for literal searches
@@ -1161,10 +1161,48 @@ function sanitizeDoc(node: any): any {
     };
   }, [editor, isActive]);
 
-  // Note: parseError state was removed as we now handle errors gracefully with fallback content
-  if (!editor) return null;
+  // Listen for "scroll to section" events from the response panel
+  useEffect(() => {
+    if (!editor || !isActive) return;
 
-  // Note: parseError state was removed as we now handle errors gracefully with fallback content
+    const handleScrollToSection = (e: Event) => {
+      const { sectionIndex } = (e as CustomEvent).detail;
+      if (typeof sectionIndex !== "number") return;
+
+      // Find the nth separator (or doc start for section 0)
+      let currentSection = 0;
+      let targetPos = 0;
+
+      if (sectionIndex === 0) {
+        targetPos = 1;
+      } else {
+        editor.state.doc.forEach((child, offset) => {
+          if (child.type.name === "request-separator") {
+            currentSection++;
+            if (currentSection === sectionIndex) {
+              targetPos = offset + 1 + child.nodeSize;
+            }
+          }
+        });
+      }
+
+      if (targetPos > 0) {
+        const pos = Math.min(targetPos, editor.state.doc.content.size);
+        // Find nearest valid text selection position
+        const $pos = editor.state.doc.resolve(pos);
+        const selection = TextSelection.near($pos);
+        editor.view.dispatch(
+          editor.state.tr.setSelection(selection).scrollIntoView()
+        );
+        editor.view.focus();
+        e.stopImmediatePropagation();
+      }
+    };
+
+    window.addEventListener("voiden:scroll-to-section", handleScrollToSection);
+    return () => window.removeEventListener("voiden:scroll-to-section", handleScrollToSection);
+  }, [editor, isActive]);
+
   if (!editor) return null;
 
   return (

@@ -652,6 +652,7 @@ export const createPlugin = (pluginModule: (context: PluginContext) => Plugin, e
         const { useResponseStore } = await import('@/core/request-engine/stores/responseStore');
 
         const tabId = useResponseStore.getState().currentRequestTabId;
+        console.log('[openVoidenTab] title:', title, 'tabId:', tabId, 'isLoading:', useResponseStore.getState().isLoading, 'content:', JSON.stringify(content).slice(0, 200));
 
         if (!tabId) {
           useResponseStore.getState().setResponse('__default__', content, null);

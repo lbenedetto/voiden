@@ -116,6 +116,13 @@ export function ResponseViewer({
     },
   }, [parsedContent, onActiveNodeChange]);
 
+  // Update editor content when response changes (e.g. multi-request sections)
+  useEffect(() => {
+    if (editor && parsedContent) {
+      editor.commands.setContent(parsedContent);
+    }
+  }, [editor, parsedContent]);
+
   useEffect(() => {
     if (!editor) return;
 

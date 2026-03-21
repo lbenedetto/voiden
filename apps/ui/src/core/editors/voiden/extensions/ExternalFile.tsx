@@ -942,9 +942,7 @@ export const FileLink = Node.create<FileLinkOptions>({
           const getBasename = (filePath: string) => filePath?.split(/[\\/]/)?.pop();
 
           const filteredItems = fileLinks.filter((item) => {
-            const activeFileName = activeDocument ? getBasename(activeDocument.source) : "";
-            const itemFileName = getBasename(item.filePath);
-            return item.filename.toLowerCase().includes(query.toLowerCase()) && itemFileName !== activeFileName;
+            return item.filename.toLowerCase().includes(query.toLowerCase());
           });
 
           return [...filteredItems, { filePath: "", filename: "Add new file", isNew: true }];

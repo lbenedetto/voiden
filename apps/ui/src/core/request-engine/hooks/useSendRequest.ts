@@ -65,11 +65,14 @@ export const  useSendRestRequest = (editor: Editor) => {
           }
         };
 
-        // Use the orchestrator which will invoke plugin handlers for building and processing
+        // Determine which section to execute based on cursor position
+        const cursorPos = editor.state.selection.$from.pos;
+        console.log('[useSendRequest] cursorPos:', cursorPos);
         const response = await requestOrchestrator.executeRequest(
           editor,
           activeEnv,
-          abortControllerRef.current.signal
+          abortControllerRef.current.signal,
+          { sectionPos: cursorPos }
         );
 
         // sendRequestHybrid returns error responses instead of throwing.

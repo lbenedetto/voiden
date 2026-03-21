@@ -36,10 +36,18 @@ interface RequestOrchestrator {
   clear: () => void;
 }
 
+export interface RequestExecuteOptions {
+  /** ProseMirror position of the request section to execute (for multi-request docs) */
+  sectionPos?: number;
+}
+
 class RequestOrchestratorImpl implements RequestOrchestrator {
   requestHandlers: RequestBuildHandler[] = [];
   responseHandlers: ResponseProcessHandler[] = [];
   responseSections: ResponseSection[] = [];
+
+  /** Options for the currently executing request (available to handlers) */
+  currentRequestOptions: RequestExecuteOptions = {};
 
   registerRequestHandler(handler: RequestBuildHandler) {
     requestLogger.info("Plugin registered request handler");
@@ -56,16 +64,60 @@ class RequestOrchestratorImpl implements RequestOrchestrator {
     this.responseSections.push(section);
   }
 
-  async executeRequest(editor: Editor, environment?: Record<string, string>, signal?: AbortSignal): Promise<any> {
+  async executeRequest(editor: Editor, environment?: Record<string, string>, signal?: AbortSignal, options?: RequestExecuteOptions): Promise<any> {
     requestLogger.info("Starting request execution");
+    this.currentRequestOptions = options || {};
 
     // Step 1: Build request through plugin chain
     requestLogger.info(`Building request through ${this.requestHandlers.length} plugin handler(s)`);
-    let request: any = {};
+    let request: any = {
+      __sectionPos: options?.sectionPos,
+    };
+
+    // For multi-request documents, create a scoped editor proxy so all handlers
+    // automatically get section-scoped JSON when they call editor.getJSON()
+    let handlerEditor: Editor = editor;
+    const sectionPos = options?.sectionPos;
+    let resolvedSectionIndex: number | undefined;
+    if (sectionPos !== undefined) {
+      const originalGetJSON = editor.getJSON.bind(editor);
+      handlerEditor = Object.create(editor);
+
+      // Compute sectionIndex once (reused by getJSON proxy and attached to response)
+      let sectionIndex = 0;
+      editor.state.doc.forEach((child, offset) => {
+        const nodeEnd = offset + 1 + child.nodeSize;
+        if (child.type.name === "request-separator" && sectionPos >= nodeEnd) {
+          sectionIndex++;
+        }
+      });
+      resolvedSectionIndex = sectionIndex;
+
+      handlerEditor.getJSON = () => {
+        const fullJson = originalGetJSON();
+        if (!fullJson.content) return fullJson;
+
+        // Split content at request-separator nodes
+        const sections: any[][] = [[]];
+        for (const node of fullJson.content) {
+          if (node.type === "request-separator") {
+            sections.push([]);
+          } else {
+            sections[sections.length - 1].push(node);
+          }
+        }
+
+        return { type: "doc", content: sections[sectionIndex] || [] };
+      };
+    }
 
     for (const handler of this.requestHandlers) {
       try {
-        request = await handler(request, editor);
+        request = await handler(request, handlerEditor);
+        // Preserve __sectionPos across handler chain
+        if (sectionPos !== undefined && request) {
+          request.__sectionPos = sectionPos;
+        }
       } catch (error) {
         requestLogger.error("Error in plugin request handler:", error);
         throw error;
@@ -77,6 +129,11 @@ class RequestOrchestratorImpl implements RequestOrchestrator {
 
     if (!response) {
       throw new Error("No response received from request pipeline");
+    }
+
+    // Attach section index so response handlers can link back to the originating section
+    if (resolvedSectionIndex !== undefined) {
+      response.__sectionIndex = resolvedSectionIndex;
     }
 
     // Step 3: Process response through plugin chain

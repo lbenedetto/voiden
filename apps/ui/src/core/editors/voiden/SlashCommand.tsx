@@ -110,6 +110,22 @@ const GROUPS: Group[] = [
         },
       },
       {
+        name: "new-request",
+        label: "New Request",
+        iconName: "SeparatorHorizontal",
+        aliases: ["separator", "new"],
+        slash: "/new-request",
+        singleton: false,
+        description: "Start a new request section",
+        action: (editor) => {
+          const { from, to } = editor.state.selection;
+          editor.chain().focus().deleteRange({ from, to }).insertContent([
+            { type: "request-separator" },
+            { type: "paragraph" },
+          ]).run();
+        },
+      },
+      {
         name: "runtime-variables",
         label: "Runtime Variables",
         iconName: "Quote",
@@ -457,15 +473,37 @@ export const SlashCommand = Extension.create({
             return false;
           });
 
-          const editorJSON = this.editor.getJSON();
+          // Section-scoped singleton check: only check nodes in the current section
+          // (between request-separator nodes), not the entire document
+          const doc = this.editor.state.doc;
+          const cursorPos = this.editor.state.selection.$from.pos;
+
+          // Split doc children into sections at request-separator boundaries
+          let currentSectionIndex = 0;
+          const sectionNodes: { type: string }[][] = [[]];
+          doc.forEach((child, offset) => {
+            const nodeStart = offset + 1;
+            const nodeEnd = nodeStart + child.nodeSize;
+            if (child.type.name === "request-separator") {
+              if (cursorPos >= nodeEnd) {
+                currentSectionIndex++;
+              }
+              sectionNodes.push([]);
+            } else {
+              sectionNodes[sectionNodes.length - 1].push({ type: child.type.name });
+            }
+          });
+
+          const nodesInSection = sectionNodes[currentSectionIndex] || [];
+          console.log('[SlashCommand] cursorPos:', cursorPos, 'sectionIndex:', currentSectionIndex, 'sectionCount:', sectionNodes.length, 'nodesInSection:', nodesInSection.map(n => n.type));
+
           function shouldBeEnabled(command: Command) {
-            if (!editorJSON.content|| !command.singleton) return true;
-            for (const node of editorJSON.content) {
-              if(command.compareKeys?.includes(node.type||"")){
+            if (!command.singleton) return true;
+            for (const node of nodesInSection) {
+              if (command.compareKeys?.includes(node.type || "")) {
                 return false;
               }
             }
-
             return true;
           }
 

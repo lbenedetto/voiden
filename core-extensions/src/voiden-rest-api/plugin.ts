@@ -369,6 +369,11 @@ const voidenRestApiPlugin = (context: PluginContext) => {
             wsId: response.wsId || '',
           });
 
+          // Attach section index for "scroll to request" linking
+          if (response.__sectionIndex !== undefined && responseDoc?.attrs) {
+            responseDoc.attrs.sectionIndex = response.__sectionIndex;
+          }
+
           // Open a new Voiden tab with the response
           const openStart = performance.now();
           await context.openVoidenTab(
