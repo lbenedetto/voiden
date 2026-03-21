@@ -311,8 +311,7 @@ export function ResponsePanelContainer() {
     const match = responseMatches[matchIndex];
     setResponseCurrentMatch(matchIndex);
 
-    // Focus and select in the CM view
-    match.cmView.focus();
+    // Select in the CM view (don't focus — keep focus in find input)
     match.cmView.dispatch({
       selection: { anchor: match.from, head: match.to },
       scrollIntoView: true,

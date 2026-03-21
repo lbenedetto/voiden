@@ -445,7 +445,7 @@ const VoidenEditorInner = ({
         e.preventDefault();
         if (matchPositions.length > 0) {
           const nextIndex = (currentMatch + 1) % matchPositions.length;
-          navigateToMatch(nextIndex);
+          navigateToMatch(nextIndex, false);
         }
         return;
       }
@@ -455,7 +455,7 @@ const VoidenEditorInner = ({
         e.preventDefault();
         if (matchPositions.length > 0) {
           const prevIndex = (currentMatch - 1 + matchPositions.length) % matchPositions.length;
-          navigateToMatch(prevIndex);
+          navigateToMatch(prevIndex, false);
         }
         return;
       }
@@ -1076,19 +1076,19 @@ function sanitizeDoc(node: any): any {
   // Select first match by default when opening the find toolbar
   useEffect(() => {
     if (!showFind || !editor || matchPositions.length === 0) return;
-    navigateToMatch(0, true);
+    navigateToMatch(0, false);
   }, [showFind, editor]);
 
   const handleFindPrevious = () => {
     if (matchPositions.length === 0 || !editor) return;
     const prevIndex = (currentMatch - 1 + matchPositions.length) % matchPositions.length;
-    navigateToMatch(prevIndex);
+    navigateToMatch(prevIndex, false);
   };
 
   const handleFindNext = () => {
     if (matchPositions.length === 0 || !editor) return;
     const nextIndex = (currentMatch + 1) % matchPositions.length;
-    navigateToMatch(nextIndex);
+    navigateToMatch(nextIndex, false);
   };
 
   const handleReplace = () => {

@@ -625,6 +625,8 @@ export const CodeEditor = ({
         basicSetup={{
           lineNumbers: true,
           highlightActiveLine: true,
+          // Disable built-in search when embedded in TipTap — unified search handles it
+          searchKeymap: !tiptapProps,
         }}
         onCreateEditor={(view) => {
           editorRef.current = view;
