@@ -3,10 +3,15 @@ import { AnyExtension, Editor, EditorContent, Extension, getSchema, useEditor } 
 import { Plugin, PluginKey, TextSelection } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 import { useVoidVariableData } from "@/core/runtimeVariables/hook/useVariableCapture.tsx";
-// Escape user input for literal searches
-function escapeRegExp(str: string) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+import {
+  buildUnifiedMatches,
+  escapeRegExp,
+  getPmMatches,
+  getCmMatchesByNode,
+  type UnifiedMatch,
+} from "@/core/editors/voiden/search/unifiedSearch";
+import { unifiedSearchHighlight } from "@/core/editors/voiden/search/cmHighlightEffect";
+import { findCmViewAtPos, findAllCmViews } from "@/core/editors/voiden/search/cmViewLookup";
 // Plugin to highlight all findTerm matches, with special highlight for current match
 const findHighlightPluginKey = new PluginKey("findHighlight");
 const findHighlightPlugin = new Plugin({
@@ -372,7 +377,7 @@ const VoidenEditorInner = ({
   const [showFind, setShowFind] = useState(false);
   const [findTerm, setFindTerm] = useState("");
   const [replaceTerm, setReplaceTerm] = useState("");
-  const [matchPositions, setMatchPositions] = useState<{ from: number; to: number }[]>([]);
+  const [matchPositions, setMatchPositions] = useState<UnifiedMatch[]>([]);
   const [currentMatch, setCurrentMatch] = useState(-1);
   const findInputRef = useRef<HTMLInputElement>(null);
   const [matchCase, setMatchCase] = useState(false);
@@ -383,6 +388,7 @@ const VoidenEditorInner = ({
   // Sync search state to global store
   const setGlobalTerm = useSearchStore((state) => state.setTerm);
   const setGlobalMatchCase = useSearchStore((state) => state.setMatchCase);
+  const setUnifiedSearchActive = useSearchStore((state) => state.setUnifiedSearchActive);
   useEffect(() => {
     setGlobalTerm(findTerm);
   }, [findTerm]);
@@ -406,9 +412,10 @@ const VoidenEditorInner = ({
     if (!isActive) return;
 
     const handleShortcut = (e: KeyboardEvent) => {
-      // Don't trigger if focus is in a CodeMirror editor (it has its own search)
+      // Allow unified search shortcuts even in CodeMirror editors
+      // (but skip for standalone code file editors outside VoidenEditor)
       const target = e.target as HTMLElement;
-      if (target?.closest('.cm-editor, .txt-editor')) {
+      if (target?.closest('.txt-editor')) {
         return;
       }
 
@@ -420,6 +427,7 @@ const VoidenEditorInner = ({
         e.preventDefault();
         setShowFind(true);
         setShowReplaceSection(false);
+        setUnifiedSearchActive(true);
         return;
       }
 
@@ -428,21 +436,16 @@ const VoidenEditorInner = ({
         e.preventDefault();
         setShowFind(true);
         setShowReplaceSection(true);
+        setUnifiedSearchActive(true);
         return;
       }
 
       // Cmd/Ctrl+G: Find next (only when find panel is open)
       if (mod && key === "g" && showFind && !e.shiftKey) {
         e.preventDefault();
-        const currentEditor = useVoidenEditorStore.getState().editor;
-        if (matchPositions.length > 0 && currentEditor) {
+        if (matchPositions.length > 0) {
           const nextIndex = (currentMatch + 1) % matchPositions.length;
-          const { from, to } = matchPositions[nextIndex];
-          currentEditor.commands.setTextSelection({ from, to });
-          currentEditor.commands.focus();
-          setCurrentMatch(nextIndex);
-          const meta = { term: findTerm, matchCase, matchWholeWord, useRegex, currentMatch: nextIndex };
-          currentEditor.view.dispatch(currentEditor.state.tr.setMeta(findHighlightPluginKey, meta));
+          navigateToMatch(nextIndex);
         }
         return;
       }
@@ -450,15 +453,9 @@ const VoidenEditorInner = ({
       // Shift+Cmd/Ctrl+G: Find previous (only when find panel is open)
       if (mod && key === "g" && showFind && e.shiftKey) {
         e.preventDefault();
-        const currentEditor = useVoidenEditorStore.getState().editor;
-        if (matchPositions.length > 0 && currentEditor) {
+        if (matchPositions.length > 0) {
           const prevIndex = (currentMatch - 1 + matchPositions.length) % matchPositions.length;
-          const { from, to } = matchPositions[prevIndex];
-          currentEditor.commands.setTextSelection({ from, to });
-          currentEditor.commands.focus();
-          setCurrentMatch(prevIndex);
-          const meta = { term: findTerm, matchCase, matchWholeWord, useRegex, currentMatch: prevIndex };
-          currentEditor.view.dispatch(currentEditor.state.tr.setMeta(findHighlightPluginKey, meta));
+          navigateToMatch(prevIndex);
         }
         return;
       }
@@ -479,6 +476,8 @@ const VoidenEditorInner = ({
         setShowReplaceSection(false);
         setFindTerm(""); // Clear search term
         setReplaceTerm(""); // Clear replace term
+        setUnifiedSearchActive(false);
+        clearCmHighlights();
       }
     };
     window.addEventListener("keydown", handleEscape);
@@ -908,6 +907,57 @@ function sanitizeDoc(node: any): any {
     };
   }, [editor, tabId, setScrollPosition, getScrollPosition, isActive]);
 
+  // Helper to dispatch CM highlights for the current unified matches
+  const dispatchCmHighlights = (matches: UnifiedMatch[], activeMatchIndex: number) => {
+    if (!editor) return;
+    const cmGroups = getCmMatchesByNode(matches);
+
+    // Dispatch highlights to each CM instance that has matches
+    for (const [pmNodePos, group] of cmGroups) {
+      const cmView = findCmViewAtPos(editor.view, pmNodePos);
+      if (!cmView) continue;
+      // Find which group entry (if any) is the active match
+      const currentIdx = group.findIndex((g) => g.index === activeMatchIndex);
+      cmView.dispatch({
+        effects: unifiedSearchHighlight.of({
+          ranges: group.map((g) => ({ from: g.cmFrom, to: g.cmTo })),
+          currentIndex: currentIdx,
+        }),
+      });
+    }
+
+    // Clear highlights from CM instances that have no matches
+    const allCmViews = findAllCmViews(editor.view);
+    for (const cmView of allCmViews) {
+      const cmDom = cmView.dom.closest(".cm-editor") as HTMLElement;
+      // Check if this CM view is in our groups (by checking its parent PM node)
+      let hasMatches = false;
+      for (const [pmNodePos] of cmGroups) {
+        const domNode = editor.view.nodeDOM(pmNodePos) as HTMLElement | null;
+        if (domNode && domNode.contains(cmDom)) {
+          hasMatches = true;
+          break;
+        }
+      }
+      if (!hasMatches) {
+        cmView.dispatch({
+          effects: unifiedSearchHighlight.of({ ranges: [], currentIndex: -1 }),
+        });
+      }
+    }
+  };
+
+  // Helper to clear all CM highlights
+  const clearCmHighlights = () => {
+    if (!editor) return;
+    const allCmViews = findAllCmViews(editor.view);
+    for (const cmView of allCmViews) {
+      cmView.dispatch({
+        effects: unifiedSearchHighlight.of({ ranges: [], currentIndex: -1 }),
+      });
+    }
+  };
+
   // Helper to recalculate matchPositions and reapply highlights
   const recalcFindMatches = () => {
     if (!editor) return;
@@ -923,9 +973,11 @@ function sanitizeDoc(node: any): any {
         currentMatch: -1,
       });
       editor.view.dispatch(clearTr);
+      clearCmHighlights();
       return;
     }
-    // Dispatch plugin meta with options, always include currentMatch
+
+    // Dispatch PM highlight plugin meta
     const tr = editor.state.tr.setMeta(findHighlightPluginKey, {
       term: findTerm,
       matchCase,
@@ -935,32 +987,18 @@ function sanitizeDoc(node: any): any {
     });
     editor.view.dispatch(tr);
 
-    // Compute matchPositions using same regex
-    const matches: { from: number; to: number }[] = [];
-    // build RegExp
-    let pattern = useRegex ? findTerm : escapeRegExp(findTerm);
-    if (!useRegex && matchWholeWord) pattern = `\\b${pattern}\\b`;
-    const flags = matchCase ? "g" : "gi";
-    let regex: RegExp;
-    try {
-      regex = new RegExp(pattern, flags);
-    } catch {
-      setMatchPositions([]);
-      setCurrentMatch(-1);
-      return;
-    }
-    editor.state.doc.descendants((node, pos) => {
-      if (node.isText && node.text) {
-        let m: RegExpExecArray | null;
-        while ((m = regex.exec(node.text)) !== null) {
-          matches.push({ from: pos + m.index, to: pos + m.index + m[0].length });
-          if (m.index === regex.lastIndex) regex.lastIndex++;
-        }
-      }
-      return true;
+    // Build unified matches across PM text and CM code blocks
+    const matches = buildUnifiedMatches(editor.state.doc, findTerm, {
+      matchCase,
+      matchWholeWord,
+      useRegex,
     });
+
     setMatchPositions(matches);
     setCurrentMatch(-1);
+
+    // Dispatch highlights to CM instances
+    dispatchCmHighlights(matches, -1);
   };
 
   // Unified effect to recalc as needed
@@ -987,147 +1025,179 @@ function sanitizeDoc(node: any): any {
     };
   }, [editor, findTerm, matchCase, matchWholeWord, useRegex, currentMatch]);
 
+  // Navigate to a specific match (PM or CM)
+  const navigateToMatch = (matchIndex: number, shouldFocus: boolean = true) => {
+    if (!editor || matchIndex < 0 || matchIndex >= matchPositions.length) return;
+    const match = matchPositions[matchIndex];
+    const { source } = match;
+
+    if (source.type === "prosemirror") {
+      editor.commands.setTextSelection({ from: source.from, to: source.to });
+      if (shouldFocus) editor.commands.focus();
+    } else {
+      // CodeMirror match: scroll PM to show the code block, then select in CM
+      const cmView = findCmViewAtPos(editor.view, source.pmNodePos);
+      if (cmView) {
+        // Scroll PM so the code block is visible
+        const domNode = editor.view.nodeDOM(source.pmNodePos) as HTMLElement | null;
+        if (domNode) {
+          domNode.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        }
+        // Select the match range in CM
+        if (shouldFocus) cmView.focus();
+        cmView.dispatch({
+          selection: { anchor: source.cmFrom, head: source.cmTo },
+          scrollIntoView: true,
+        });
+      }
+    }
+
+    setCurrentMatch(matchIndex);
+
+    // Update PM highlight to show current match
+    const pmMatches = getPmMatches(matchPositions);
+    const pmCurrentIdx = source.type === "prosemirror"
+      ? pmMatches.findIndex((m) => m.index === match.index)
+      : -1;
+    const meta = { term: findTerm, matchCase, matchWholeWord, useRegex, currentMatch: pmCurrentIdx };
+    editor.view.dispatch(editor.state.tr.setMeta(findHighlightPluginKey, meta));
+
+    // Update CM highlights to show current match
+    dispatchCmHighlights(matchPositions, match.index);
+  };
+
   // Auto-select first match on new search term, without focusing editor
   useEffect(() => {
     if (showFind && editor && findTerm && matchPositions.length > 0 && currentMatch < 0) {
-      const { from, to } = matchPositions[0];
-      editor.commands.setTextSelection({ from, to });
-      setCurrentMatch(0);
+      navigateToMatch(0, false);
     }
   }, [editor, showFind, findTerm, matchPositions]);
 
   // Select first match by default when opening the find toolbar
   useEffect(() => {
     if (!showFind || !editor || matchPositions.length === 0) return;
-    const { from, to } = matchPositions[0];
-    editor.commands.setTextSelection({ from, to });
-    editor.commands.focus();
-    setCurrentMatch(0);
+    navigateToMatch(0, true);
   }, [showFind, editor]);
 
   const handleFindPrevious = () => {
     if (matchPositions.length === 0 || !editor) return;
     const prevIndex = (currentMatch - 1 + matchPositions.length) % matchPositions.length;
-    const { from, to } = matchPositions[prevIndex];
-    editor.commands.setTextSelection({ from, to });
-    editor.commands.focus();
-    setCurrentMatch(prevIndex);
-    // Re-dispatch plugin meta with updated currentMatch
-    const meta = { term: findTerm, matchCase, matchWholeWord, useRegex, currentMatch: prevIndex };
-    editor.view.dispatch(editor.state.tr.setMeta(findHighlightPluginKey, meta));
+    navigateToMatch(prevIndex);
   };
 
   const handleFindNext = () => {
     if (matchPositions.length === 0 || !editor) return;
     const nextIndex = (currentMatch + 1) % matchPositions.length;
-    const { from, to } = matchPositions[nextIndex];
-    editor.commands.setTextSelection({ from, to });
-    editor.commands.focus();
-    setCurrentMatch(nextIndex);
-    // Re-dispatch plugin meta with updated currentMatch
-    const meta = { term: findTerm, matchCase, matchWholeWord, useRegex, currentMatch: nextIndex };
-    editor.view.dispatch(editor.state.tr.setMeta(findHighlightPluginKey, meta));
+    navigateToMatch(nextIndex);
   };
 
   const handleReplace = () => {
     if (matchPositions.length === 0 || currentMatch < 0 || !editor) return;
     const replaceIndex = currentMatch;
-    const { from, to } = matchPositions[replaceIndex];
-    // Perform replacement
-    editor.commands.insertContentAt({ from, to }, replaceTerm);
+    const match = matchPositions[replaceIndex];
+    const { source } = match;
 
-    // Compute updated match positions
-    const newMatches: { from: number; to: number }[] = [];
-    // Build regex
-    let pattern = useRegex ? findTerm : escapeRegExp(findTerm);
-    if (!useRegex && matchWholeWord) pattern = `\\b${pattern}\\b`;
-    const flags = matchCase ? "g" : "gi";
-    let regex: RegExp;
-    try {
-      regex = new RegExp(pattern, flags);
-    } catch {
-      setMatchPositions([]);
-      setCurrentMatch(-1);
-      return;
-    }
-    editor.state.doc.descendants((node, pos) => {
-      if (node.isText && node.text) {
-        let m: RegExpExecArray | null;
-        while ((m = regex.exec(node.text)) !== null) {
-          newMatches.push({ from: pos + m.index, to: pos + m.index + m[0].length });
-          if (m.index === regex.lastIndex) regex.lastIndex++;
-        }
+    if (source.type === "prosemirror") {
+      // PM replacement — goes through PM undo stack
+      editor.commands.insertContentAt({ from: source.from, to: source.to }, replaceTerm);
+    } else {
+      // CM replacement — all through PM transaction for undo support
+      const node = editor.state.doc.nodeAt(source.pmNodePos);
+      if (node && typeof node.attrs.body === "string") {
+        const body = node.attrs.body;
+        const newBody =
+          body.slice(0, source.cmFrom) + replaceTerm + body.slice(source.cmTo);
+        const tr = editor.state.tr.setNodeMarkup(source.pmNodePos, undefined, {
+          ...node.attrs,
+          body: newBody,
+        });
+        editor.view.dispatch(tr);
       }
-      return true;
+    }
+
+    // Recompute unified matches after replacement
+    const newMatches = buildUnifiedMatches(editor.state.doc, findTerm, {
+      matchCase,
+      matchWholeWord,
+      useRegex,
     });
     setMatchPositions(newMatches);
 
-    // Select next match
+    // Navigate to next match
     if (newMatches.length > 0) {
       const nextIndex = replaceIndex >= newMatches.length ? 0 : replaceIndex;
-      const { from: nf, to: nt } = newMatches[nextIndex];
-      editor.commands.setTextSelection({ from: nf, to: nt });
-      editor.commands.focus();
-      setCurrentMatch(nextIndex);
+      // Defer navigation so state has settled
+      setTimeout(() => navigateToMatch(nextIndex), 0);
     } else {
       setCurrentMatch(-1);
+      clearCmHighlights();
     }
 
-    // Refresh highlights
-    const tr = editor.state.tr.setMeta(findHighlightPluginKey, {
+    // Refresh PM highlights
+    const tr2 = editor.state.tr.setMeta(findHighlightPluginKey, {
       term: findTerm,
       matchCase,
       matchWholeWord,
       useRegex,
       currentMatch: newMatches.length > 0 ? (replaceIndex >= newMatches.length ? 0 : replaceIndex) : -1,
     });
-    editor.view.dispatch(tr);
+    editor.view.dispatch(tr2);
   };
 
   const handleReplaceAll = () => {
     if (!editor || matchPositions.length === 0) return;
-    // Perform replacements in reverse order to preserve offsets
-    [...matchPositions].reverse().forEach(({ from, to }) => {
-      editor.commands.insertContentAt({ from, to }, replaceTerm);
-    });
 
-    // Recalculate matches using same regex logic
-    const newMatches: { from: number; to: number }[] = [];
-    let pattern = useRegex ? findTerm : escapeRegExp(findTerm);
-    if (!useRegex && matchWholeWord) pattern = `\b${pattern}\b`;
-    const flags = matchCase ? "g" : "gi";
-    let regex: RegExp;
-    try {
-      regex = new RegExp(pattern, flags);
-    } catch {
-      setMatchPositions([]);
-      setCurrentMatch(-1);
-      return;
-    }
-    editor.state.doc.descendants((node, pos) => {
-      if (node.isText && node.text) {
-        let m: RegExpExecArray | null;
-        while ((m = regex.exec(node.text)) !== null) {
-          newMatches.push({ from: pos + m.index, to: pos + m.index + m[0].length });
-          if (m.index === regex.lastIndex) regex.lastIndex++;
-        }
+    // Build a single PM transaction for all replacements (single undo step)
+    let tr = editor.state.tr;
+
+    // Separate PM and CM matches
+    const pmMatches = matchPositions
+      .filter((m) => m.source.type === "prosemirror")
+      .map((m) => m.source as { type: "prosemirror"; from: number; to: number });
+    const cmMatchesByNode = getCmMatchesByNode(matchPositions);
+
+    // Replace CM matches first (setNodeMarkup doesn't shift PM text positions)
+    for (const [pmNodePos, group] of cmMatchesByNode) {
+      const node = tr.doc.nodeAt(pmNodePos);
+      if (!node || typeof node.attrs.body !== "string") continue;
+      // Apply all replacements in reverse offset order within this body
+      let body = node.attrs.body;
+      const sorted = [...group].sort((a, b) => b.cmFrom - a.cmFrom);
+      for (const { cmFrom, cmTo } of sorted) {
+        body = body.slice(0, cmFrom) + replaceTerm + body.slice(cmTo);
       }
-      return true;
+      tr = tr.setNodeMarkup(pmNodePos, undefined, { ...node.attrs, body });
+    }
+
+    // Replace PM matches in reverse order to preserve offsets
+    const sortedPm = [...pmMatches].sort((a, b) => b.from - a.from);
+    for (const { from, to } of sortedPm) {
+      tr = tr.replaceWith(from, to, editor.schema.text(replaceTerm));
+    }
+
+    editor.view.dispatch(tr);
+
+    // Recompute unified matches
+    const newMatches = buildUnifiedMatches(editor.state.doc, findTerm, {
+      matchCase,
+      matchWholeWord,
+      useRegex,
     });
     setMatchPositions(newMatches);
     setCurrentMatch(-1);
 
-    // Re-dispatch highlights
-    const tr = editor.state.tr.setMeta(findHighlightPluginKey, {
+    // Refresh highlights
+    const tr2 = editor.state.tr.setMeta(findHighlightPluginKey, {
       term: findTerm,
       matchCase,
       matchWholeWord,
       useRegex,
       currentMatch: -1,
     });
-    editor.view.dispatch(tr);
+    editor.view.dispatch(tr2);
+    dispatchCmHighlights(newMatches, -1);
 
-    // If no matches remain, collapse the selection at the end of replacements
+    // If no matches remain, collapse selection
     if (newMatches.length === 0) {
       const pos = editor.state.selection.to;
       editor.commands.setTextSelection({ from: pos, to: pos });
@@ -1294,6 +1364,8 @@ function sanitizeDoc(node: any): any {
                     setShowReplaceSection(false);
                     setFindTerm(""); // Clear search term
                     setReplaceTerm(""); // Clear replace term
+                    setUnifiedSearchActive(false);
+                    clearCmHighlights();
                   }}
                   className="p-1.5 rounded transition-all w-7 h-7 flex items-center justify-center border bg-active text-comment border-panel-border hover:bg-active hover:text-text hover:border-accent active:scale-[0.96]"
                   title="Close (Esc)"

@@ -12,11 +12,15 @@ import type { ResponseNodeType } from "../stores/responseStore";
 import { SendRequestButton } from "./SendRequestButton";
 import { ResponseViewer } from "./ResponseViewer";
 import { useMemo, useEffect, useCallback, useState, useRef } from "react";
-import { Shield, Search, LocateFixed } from "lucide-react";
+import { Shield, Search, LocateFixed, ArrowUpIcon, ArrowDownIcon, X } from "lucide-react";
 import { useGetPanelTabs } from "@/core/layout/hooks";
 import { parseMarkdown } from "@/core/editors/voiden/markdownConverter";
 import { getSchema } from "@tiptap/core";
 import { voidenExtensions } from "@/core/editors/voiden/extensions";
+import { Input } from "@/core/components/ui/input";
+import { escapeRegExp } from "@/core/editors/voiden/search/unifiedSearch";
+import { unifiedSearchHighlight } from "@/core/editors/voiden/search/cmHighlightEffect";
+import type { EditorView as CMEditorView } from "@codemirror/view";
 
 const MAX_CACHED_RESPONSE_VIEWERS = 8;
 
@@ -208,54 +212,177 @@ export function ResponsePanelContainer() {
 
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Find the CodeMirror editor that should receive the search panel.
-  // Prefers the currently focused CM editor, falls back to first visible.
-  const findVisibleCmView = () => {
-    const el = containerRef.current;
-    if (!el) return null;
+  // --- Unified find for response panel ---
+  const [showResponseFind, setShowResponseFind] = useState(false);
+  const [responseFindTerm, setResponseFindTerm] = useState("");
+  const [responseMatchCase, setResponseMatchCase] = useState(false);
+  const [responseCurrentMatch, setResponseCurrentMatch] = useState(-1);
+  const responseFindInputRef = useRef<HTMLInputElement>(null);
 
-    // Check if focus is already inside a CM editor
-    const active = document.activeElement;
-    if (active) {
-      const activeCm = active.closest('.cm-editor') as HTMLElement & { cmView?: any } | null;
-      if (activeCm && el.contains(activeCm) && activeCm.cmView) {
-        return activeCm.cmView;
+  type ResponseMatch = { cmView: CMEditorView; from: number; to: number };
+  const [responseMatches, setResponseMatches] = useState<ResponseMatch[]>([]);
+
+  // Collect all visible CM views in the response panel
+  const getResponseCmViews = useCallback((): CMEditorView[] => {
+    const el = containerRef.current;
+    if (!el) return [];
+    const views: CMEditorView[] = [];
+    const cmEditors = el.querySelectorAll('.cm-editor');
+    for (const cmEl of cmEditors) {
+      const htmlEl = cmEl as HTMLElement & { cmView?: CMEditorView };
+      if (htmlEl.offsetParent === null) continue;
+      if (htmlEl.cmView) views.push(htmlEl.cmView);
+    }
+    return views;
+  }, []);
+
+  // Build matches across all CM views in the response panel
+  const recalcResponseMatches = useCallback(() => {
+    if (!responseFindTerm) {
+      setResponseMatches([]);
+      setResponseCurrentMatch(-1);
+      // Clear all highlights
+      for (const cmView of getResponseCmViews()) {
+        cmView.dispatch({
+          effects: unifiedSearchHighlight.of({ ranges: [], currentIndex: -1 }),
+        });
+      }
+      return;
+    }
+
+    const pattern = escapeRegExp(responseFindTerm);
+    const flags = responseMatchCase ? "g" : "gi";
+    let regex: RegExp;
+    try {
+      regex = new RegExp(pattern, flags);
+    } catch {
+      setResponseMatches([]);
+      setResponseCurrentMatch(-1);
+      return;
+    }
+
+    const allMatches: ResponseMatch[] = [];
+    const cmViews = getResponseCmViews();
+
+    for (const cmView of cmViews) {
+      const text = cmView.state.doc.toString();
+      regex.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = regex.exec(text)) !== null) {
+        allMatches.push({ cmView, from: m.index, to: m.index + m[0].length });
+        if (m.index === regex.lastIndex) regex.lastIndex++;
       }
     }
 
-    // Fall back to first visible CM editor
-    const cmEditors = el.querySelectorAll('.cm-editor');
-    for (const cmEl of cmEditors) {
-      const htmlEl = cmEl as HTMLElement & { cmView?: any };
-      if (htmlEl.offsetParent === null) continue;
-      const view = htmlEl.cmView;
-      if (view && typeof view.focus === 'function') return view;
-    }
-    return null;
-  };
+    setResponseMatches(allMatches);
+    setResponseCurrentMatch(allMatches.length > 0 ? 0 : -1);
 
-  // Intercept Cmd+F / Ctrl+F to open CodeMirror search panel in response viewer
+    // Dispatch highlights per CM view
+    const grouped = new Map<CMEditorView, Array<{ from: number; to: number; globalIdx: number }>>();
+    allMatches.forEach((match, idx) => {
+      let group = grouped.get(match.cmView);
+      if (!group) { group = []; grouped.set(match.cmView, group); }
+      group.push({ from: match.from, to: match.to, globalIdx: idx });
+    });
+
+    for (const cmView of cmViews) {
+      const group = grouped.get(cmView);
+      if (!group) {
+        cmView.dispatch({ effects: unifiedSearchHighlight.of({ ranges: [], currentIndex: -1 }) });
+      } else {
+        const currentGlobalIdx = allMatches.length > 0 ? 0 : -1;
+        const localCurrentIdx = group.findIndex(g => g.globalIdx === currentGlobalIdx);
+        cmView.dispatch({
+          effects: unifiedSearchHighlight.of({
+            ranges: group.map(g => ({ from: g.from, to: g.to })),
+            currentIndex: localCurrentIdx,
+          }),
+        });
+      }
+    }
+  }, [responseFindTerm, responseMatchCase, getResponseCmViews]);
+
+  useEffect(() => {
+    recalcResponseMatches();
+  }, [responseFindTerm, responseMatchCase]);
+
+  const navigateResponseMatch = useCallback((matchIndex: number) => {
+    if (matchIndex < 0 || matchIndex >= responseMatches.length) return;
+    const match = responseMatches[matchIndex];
+    setResponseCurrentMatch(matchIndex);
+
+    // Focus and select in the CM view
+    match.cmView.focus();
+    match.cmView.dispatch({
+      selection: { anchor: match.from, head: match.to },
+      scrollIntoView: true,
+    });
+
+    // Scroll the CM editor's parent into view
+    const cmDom = match.cmView.dom.closest('.cm-editor') as HTMLElement | null;
+    if (cmDom) cmDom.scrollIntoView({ block: "nearest", behavior: "smooth" });
+
+    // Update highlights to show current match
+    const cmViews = getResponseCmViews();
+    const grouped = new Map<CMEditorView, Array<{ from: number; to: number; globalIdx: number }>>();
+    responseMatches.forEach((m, idx) => {
+      let group = grouped.get(m.cmView);
+      if (!group) { group = []; grouped.set(m.cmView, group); }
+      group.push({ from: m.from, to: m.to, globalIdx: idx });
+    });
+
+    for (const cmView of cmViews) {
+      const group = grouped.get(cmView);
+      if (!group) {
+        cmView.dispatch({ effects: unifiedSearchHighlight.of({ ranges: [], currentIndex: -1 }) });
+      } else {
+        const localCurrentIdx = group.findIndex(g => g.globalIdx === matchIndex);
+        cmView.dispatch({
+          effects: unifiedSearchHighlight.of({
+            ranges: group.map(g => ({ from: g.from, to: g.to })),
+            currentIndex: localCurrentIdx,
+          }),
+        });
+      }
+    }
+  }, [responseMatches, getResponseCmViews]);
+
+  const closeResponseFind = useCallback(() => {
+    setShowResponseFind(false);
+    setResponseFindTerm("");
+    setResponseMatches([]);
+    setResponseCurrentMatch(-1);
+    for (const cmView of getResponseCmViews()) {
+      cmView.dispatch({
+        effects: unifiedSearchHighlight.of({ ranges: [], currentIndex: -1 }),
+      });
+    }
+  }, [getResponseCmViews]);
+
+  // Intercept Cmd+F / Ctrl+F to open unified find in response panel
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
-        const view = findVisibleCmView();
-        if (view) {
-          e.preventDefault();
-          e.stopPropagation();
-          view.focus();
-          import('@codemirror/search').then(({ openSearchPanel }) => {
-            openSearchPanel(view);
-          });
-        }
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        setShowResponseFind(true);
+        setTimeout(() => responseFindInputRef.current?.focus(), 50);
+      }
+      if (e.key === 'Escape' && showResponseFind) {
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        closeResponseFind();
       }
     };
 
-    el.addEventListener('keydown', handleKeyDown);
-    return () => el.removeEventListener('keydown', handleKeyDown);
-  }, []);
+    // Use capture phase so we intercept before CodeMirror's own Mod-f handler
+    el.addEventListener('keydown', handleKeyDown, true);
+    return () => el.removeEventListener('keydown', handleKeyDown, true);
+  }, [showResponseFind, closeResponseFind]);
 
   return (
     <div ref={containerRef} className="h-full bg-bg flex flex-col response-panel-root" tabIndex={-1}>
@@ -351,13 +478,8 @@ export function ResponsePanelContainer() {
               className="p-1.5 text-comment hover:text-text transition-colors rounded"
               title="Find (⌘F)"
               onClick={() => {
-                const view = findVisibleCmView();
-                if (view) {
-                  view.focus();
-                  import('@codemirror/search').then(({ openSearchPanel }) => {
-                    openSearchPanel(view);
-                  });
-                }
+                setShowResponseFind(true);
+                setTimeout(() => responseFindInputRef.current?.focus(), 50);
               }}
             >
               <Search size={14} />
@@ -366,6 +488,81 @@ export function ResponsePanelContainer() {
           {isVoidFile && <SendRequestButton />}
         </div>
       </div>
+
+      {/* Find bar */}
+      {showResponseFind && (
+        <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border bg-panel flex-shrink-0">
+          <Input
+            ref={responseFindInputRef}
+            type="text"
+            placeholder="Find in response"
+            value={responseFindTerm}
+            onChange={(e) => setResponseFindTerm(e.target.value)}
+            className="flex-1 h-7 text-[13px] max-w-[250px] px-2 bg-editor border-panel-border focus-visible:ring-1 focus-visible:ring-accent focus-visible:border-accent"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (responseMatches.length > 0) {
+                  navigateResponseMatch((responseCurrentMatch + 1) % responseMatches.length);
+                }
+              } else if (e.key === 'Enter' && e.shiftKey) {
+                e.preventDefault();
+                if (responseMatches.length > 0) {
+                  navigateResponseMatch((responseCurrentMatch - 1 + responseMatches.length) % responseMatches.length);
+                }
+              } else if (e.key === 'Escape') {
+                closeResponseFind();
+              }
+            }}
+          />
+          <button
+            className={`p-1 rounded text-xs font-mono w-6 h-6 flex items-center justify-center border ${
+              responseMatchCase
+                ? "bg-accent text-white border-accent"
+                : "bg-active text-comment border-panel-border hover:text-text hover:border-accent"
+            }`}
+            title="Match Case"
+            onClick={() => setResponseMatchCase(!responseMatchCase)}
+          >
+            Aa
+          </button>
+          <button
+            onClick={() => {
+              if (responseMatches.length > 0) {
+                navigateResponseMatch((responseCurrentMatch - 1 + responseMatches.length) % responseMatches.length);
+              }
+            }}
+            disabled={responseMatches.length === 0}
+            className="p-1 rounded w-6 h-6 flex items-center justify-center border bg-active text-comment border-panel-border hover:text-text hover:border-accent disabled:opacity-40"
+          >
+            <ArrowUpIcon size={12} strokeWidth={2} />
+          </button>
+          <button
+            onClick={() => {
+              if (responseMatches.length > 0) {
+                navigateResponseMatch((responseCurrentMatch + 1) % responseMatches.length);
+              }
+            }}
+            disabled={responseMatches.length === 0}
+            className="p-1 rounded w-6 h-6 flex items-center justify-center border bg-active text-comment border-panel-border hover:text-text hover:border-accent disabled:opacity-40"
+          >
+            <ArrowDownIcon size={12} strokeWidth={2} />
+          </button>
+          <span className="text-xs text-comment min-w-[60px] text-center">
+            {responseFindTerm && responseMatches.length > 0
+              ? `${responseCurrentMatch + 1} of ${responseMatches.length}`
+              : responseFindTerm
+              ? "No results"
+              : ""}
+          </span>
+          <button
+            onClick={closeResponseFind}
+            className="p-1 rounded w-6 h-6 flex items-center justify-center border bg-active text-comment border-panel-border hover:text-text hover:border-accent"
+          >
+            <X size={12} strokeWidth={2} />
+          </button>
+        </div>
+      )}
 
       {/* Content area */}
       <div className="flex-1 relative overflow-hidden">
