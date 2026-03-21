@@ -3,29 +3,31 @@
  *
  * Visual divider that splits a .void document into independent request sections.
  * Each section between separators has its own scope for endpoint, headers, body, etc.
+ * Stores a `colorIndex` attribute that determines the section's indicator color.
  */
 
 import { Node, mergeAttributes } from "@tiptap/core";
-import { ReactNodeViewRenderer, NodeViewWrapper } from "@tiptap/react";
+import { NodeViewProps, ReactNodeViewRenderer, NodeViewWrapper } from "@tiptap/react";
 import { useRef, useState, useEffect } from "react";
+import { getSectionLineColor } from "../extensions/sectionIndicator";
 
-const RequestSeparatorView = () => {
+const RequestSeparatorView = (props: NodeViewProps) => {
+  const { node } = props;
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const [sectionColor, setSectionColor] = useState<string | null>(null);
+  const [decorationColor, setDecorationColor] = useState<string | null>(null);
 
+  // Read section color from decoration data attribute (set by sectionIndicator plugin)
   useEffect(() => {
-    // Read the section color from the decoration's data attribute on the parent wrapper
     const el = wrapperRef.current;
     if (!el) return;
     const parentNode = el.closest("[data-section-color]") as HTMLElement | null;
     if (parentNode) {
-      setSectionColor(parentNode.getAttribute("data-section-color"));
+      setDecorationColor(parentNode.getAttribute("data-section-color"));
     }
 
-    // Watch for changes via MutationObserver (decoration updates)
     const observer = new MutationObserver(() => {
       const parent = el.closest("[data-section-color]") as HTMLElement | null;
-      setSectionColor(parent?.getAttribute("data-section-color") ?? null);
+      setDecorationColor(parent?.getAttribute("data-section-color") ?? null);
     });
     const target = el.parentElement?.parentElement;
     if (target) {
@@ -34,8 +36,10 @@ const RequestSeparatorView = () => {
     return () => observer.disconnect();
   }, []);
 
-  const lineColor = sectionColor ?? "color-mix(in srgb, var(--accent) 40%, transparent)";
-  const textColor = sectionColor ?? "color-mix(in srgb, var(--accent) 60%, transparent)";
+  // Use decoration color if available, otherwise derive from stored colorIndex
+  const colorIndex = typeof node.attrs.colorIndex === "number" ? node.attrs.colorIndex : 0;
+  const lineColor = decorationColor ?? getSectionLineColor(colorIndex);
+  const textColor = decorationColor ?? getSectionLineColor(colorIndex);
 
   return (
     <NodeViewWrapper>
@@ -90,6 +94,14 @@ export const RequestSeparatorNode = Node.create({
   atom: true,
   draggable: true,
   selectable: true,
+
+  addAttributes() {
+    return {
+      colorIndex: {
+        default: 0,
+      },
+    };
+  },
 
   parseHTML() {
     return [

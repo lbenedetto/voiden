@@ -81,6 +81,7 @@ class RequestOrchestratorImpl implements RequestOrchestrator {
     let handlerEditor: Editor = editor;
     const sectionPos = options?.sectionPos;
     let resolvedSectionIndex: number | undefined;
+    let resolvedColorIndex: number | undefined;
     const hasSectionInfo = options?.sectionIndex !== undefined || sectionPos !== undefined;
     if (hasSectionInfo) {
       const originalGetJSON = editor.getJSON.bind(editor);
@@ -93,6 +94,18 @@ class RequestOrchestratorImpl implements RequestOrchestrator {
           const nodeEnd = offset + 1 + child.nodeSize;
           if (child.type.name === "request-separator" && sectionPos >= nodeEnd) {
             sectionIndex++;
+            resolvedColorIndex = typeof child.attrs.colorIndex === "number" ? child.attrs.colorIndex : undefined;
+          }
+        });
+      } else if (options?.sectionIndex !== undefined) {
+        // Look up the colorIndex for the given sectionIndex
+        let sepIdx = 0;
+        editor.state.doc.forEach((child) => {
+          if (child.type.name === "request-separator") {
+            sepIdx++;
+            if (sepIdx === sectionIndex) {
+              resolvedColorIndex = typeof child.attrs.colorIndex === "number" ? child.attrs.colorIndex : undefined;
+            }
           }
         });
       }
@@ -142,9 +155,11 @@ class RequestOrchestratorImpl implements RequestOrchestrator {
       throw new Error("No response received from request pipeline");
     }
 
-    // Attach section index so response handlers can link back to the originating section
+    // Attach section info so response handlers can link back to the originating section
     if (resolvedSectionIndex !== undefined) {
       response.__sectionIndex = resolvedSectionIndex;
+      // First section (index 0) has no separator, default its color to 0
+      response.__sectionColorIndex = resolvedColorIndex ?? 0;
     }
 
     // Step 3: Process response through plugin chain

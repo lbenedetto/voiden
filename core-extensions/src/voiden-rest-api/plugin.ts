@@ -369,9 +369,12 @@ const voidenRestApiPlugin = (context: PluginContext) => {
             wsId: response.wsId || '',
           });
 
-          // Attach section index for "scroll to request" linking
+          // Attach section info for "scroll to request" linking and color matching
           if (response.__sectionIndex !== undefined && responseDoc?.attrs) {
             responseDoc.attrs.sectionIndex = response.__sectionIndex;
+          }
+          if (response.__sectionColorIndex !== undefined && responseDoc?.attrs) {
+            responseDoc.attrs.sectionColorIndex = response.__sectionColorIndex;
           }
 
           // Open a new Voiden tab with the response

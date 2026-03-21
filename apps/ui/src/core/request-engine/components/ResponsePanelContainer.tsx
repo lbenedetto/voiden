@@ -19,7 +19,7 @@ import { getSchema } from "@tiptap/core";
 import { voidenExtensions } from "@/core/editors/voiden/extensions";
 import { Input } from "@/core/components/ui/input";
 import { escapeRegExp } from "@/core/editors/voiden/search/unifiedSearch";
-import { SECTION_COLORS } from "@/core/editors/voiden/extensions/sectionIndicator";
+import { getSectionBorderColor } from "@/core/editors/voiden/extensions/sectionIndicator";
 import { unifiedSearchHighlight } from "@/core/editors/voiden/search/cmHighlightEffect";
 import type { EditorView as CMEditorView } from "@codemirror/view";
 
@@ -173,6 +173,7 @@ export function ResponsePanelContainer() {
       requestMeta: responseDoc.attrs.requestMeta,
       protocol: responseDoc.attrs.protocol,
       sectionIndex: responseDoc.attrs.sectionIndex,
+      sectionColorIndex: responseDoc.attrs.sectionColorIndex,
     };
   }, [responseDoc]);
 
@@ -390,8 +391,8 @@ export function ResponsePanelContainer() {
       className="h-full bg-bg flex flex-col response-panel-root"
       tabIndex={-1}
       style={
-        statusInfo?.sectionIndex !== undefined
-          ? { borderLeft: `3px solid ${SECTION_COLORS[statusInfo.sectionIndex % SECTION_COLORS.length]}` }
+        statusInfo?.sectionColorIndex !== undefined
+          ? { borderLeft: `3px solid ${getSectionBorderColor(statusInfo.sectionColorIndex)}` }
           : undefined
       }
     >

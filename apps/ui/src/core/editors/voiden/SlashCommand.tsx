@@ -9,6 +9,7 @@ import { cn } from "@/core/lib/utils";
 import { icons } from "lucide-react";
 
 import { useEditorEnhancementStore } from "@/plugins";
+import { pickDistinctColorIndex } from "./extensions/sectionIndicator";
 
 const GROUPS: Group[] = [
   {
@@ -119,8 +120,29 @@ const GROUPS: Group[] = [
         description: "Start a new request section",
         action: (editor) => {
           const { from, to } = editor.state.selection;
+
+          // Find adjacent separator colors to pick a distinct color
+          let prevColorIndex = -1;
+          let nextColorIndex = -1;
+          const cursorPos = from;
+          let foundPrev = false;
+
+          editor.state.doc.forEach((child: any, offset: number) => {
+            if (child.type.name === "request-separator") {
+              const ci = typeof child.attrs.colorIndex === "number" ? child.attrs.colorIndex : 0;
+              if (offset < cursorPos) {
+                prevColorIndex = ci;
+              } else if (!foundPrev && offset >= cursorPos) {
+                nextColorIndex = ci;
+                foundPrev = true;
+              }
+            }
+          });
+
+          const colorIndex = pickDistinctColorIndex(prevColorIndex, nextColorIndex);
+
           editor.chain().focus().deleteRange({ from, to }).insertContent([
-            { type: "request-separator" },
+            { type: "request-separator", attrs: { colorIndex } },
             { type: "paragraph" },
           ]).run();
         },
