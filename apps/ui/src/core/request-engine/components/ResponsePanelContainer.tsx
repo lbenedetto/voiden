@@ -12,7 +12,7 @@ import type { ResponseNodeType } from "../stores/responseStore";
 import { SendRequestButton } from "./SendRequestButton";
 import { ResponseViewer } from "./ResponseViewer";
 import { useMemo, useEffect, useCallback, useState, useRef } from "react";
-import { Shield, Search, LocateFixed, ArrowUpIcon, ArrowDownIcon, X, ChevronDown, ChevronRight } from "lucide-react";
+import { Shield, Search, LocateFixed, ArrowUpIcon, ArrowDownIcon, X, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import { useGetPanelTabs } from "@/core/layout/hooks";
 import { parseMarkdown } from "@/core/editors/voiden/markdownConverter";
 import { getSchema } from "@tiptap/core";
@@ -62,6 +62,20 @@ export function ResponsePanelContainer() {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
+      return next;
+    });
+  }, []);
+  const collapseAllSections = useCallback((tabId: string, sectionIndices: number[]) => {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      for (const idx of sectionIndices) next.add(`${tabId}:${idx}`);
+      return next;
+    });
+  }, []);
+  const expandAllSections = useCallback((tabId: string, sectionIndices: number[]) => {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      for (const idx of sectionIndices) next.delete(`${tabId}:${idx}`);
       return next;
     });
   }, []);
@@ -184,6 +198,38 @@ export function ResponsePanelContainer() {
       }))
       .sort((a, b) => a.sectionIndex - b.sectionIndex);
   }, [tabSections]);
+
+  // Auto-expand the section that just received a new response.
+  // Track response doc references to detect which section changed.
+  const prevSectionDocsRef = useRef<Record<string, Record<number, any>>>({});
+  useEffect(() => {
+    if (!activeTabId || !tabSections) return;
+
+    const prevDocs = prevSectionDocsRef.current[activeTabId] || {};
+    const currentKeys = Object.keys(tabSections).map(Number);
+
+    for (const key of currentKeys) {
+      const currentDoc = tabSections[key]?.responseDoc;
+      const prevDoc = prevDocs[key];
+      // If this section's doc changed (new or re-executed), expand it
+      if (currentDoc && currentDoc !== prevDoc) {
+        const collapseKey = `${activeTabId}:${key}`;
+        setCollapsedSections((prev) => {
+          if (!prev.has(collapseKey)) return prev;
+          const next = new Set(prev);
+          next.delete(collapseKey);
+          return next;
+        });
+      }
+    }
+
+    // Snapshot current docs for next comparison
+    const snapshot: Record<number, any> = {};
+    for (const key of currentKeys) {
+      snapshot[key] = tabSections[key]?.responseDoc;
+    }
+    prevSectionDocsRef.current[activeTabId] = snapshot;
+  }, [activeTabId, tabSections]);
 
   // Latest response (highest section index) for status bar display
   const latestResponse = sectionResponses.length > 0
@@ -529,6 +575,24 @@ export function ResponsePanelContainer() {
             >
               <LocateFixed size={14} />
             </button>
+          )}
+          {showContent && sectionResponses.length > 1 && activeTabId && (
+            <>
+              <button
+                className="p-1.5 text-comment hover:text-text transition-colors rounded"
+                title="Expand all sections"
+                onClick={() => expandAllSections(activeTabId, sectionResponses.map((s) => s.sectionIndex))}
+              >
+                <ChevronsUpDown size={14} />
+              </button>
+              <button
+                className="p-1.5 text-comment hover:text-text transition-colors rounded"
+                title="Collapse all sections"
+                onClick={() => collapseAllSections(activeTabId, sectionResponses.map((s) => s.sectionIndex))}
+              >
+                <ChevronsDownUp size={14} />
+              </button>
+            </>
           )}
           {showContent && (
             <button
