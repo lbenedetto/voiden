@@ -376,6 +376,9 @@ const voidenRestApiPlugin = (context: PluginContext) => {
           if (response.__sectionColorIndex !== undefined && responseDoc?.attrs) {
             responseDoc.attrs.sectionColorIndex = response.__sectionColorIndex;
           }
+          if (response.__sectionLabel && responseDoc?.attrs) {
+            responseDoc.attrs.sectionLabel = response.__sectionLabel;
+          }
 
           // Open a new Voiden tab with the response
           const openStart = performance.now();

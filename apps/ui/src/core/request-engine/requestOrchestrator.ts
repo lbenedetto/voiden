@@ -82,6 +82,7 @@ class RequestOrchestratorImpl implements RequestOrchestrator {
     const sectionPos = options?.sectionPos;
     let resolvedSectionIndex: number | undefined;
     let resolvedColorIndex: number | undefined;
+    let resolvedSectionLabel: string | undefined;
     const hasSectionInfo = options?.sectionIndex !== undefined || sectionPos !== undefined;
     if (hasSectionInfo) {
       const originalGetJSON = editor.getJSON.bind(editor);
@@ -95,6 +96,7 @@ class RequestOrchestratorImpl implements RequestOrchestrator {
           if (child.type.name === "request-separator" && sectionPos >= nodeEnd) {
             sectionIndex++;
             resolvedColorIndex = typeof child.attrs.colorIndex === "number" ? child.attrs.colorIndex : undefined;
+            resolvedSectionLabel = child.attrs.label || undefined;
           }
         });
       } else if (options?.sectionIndex !== undefined) {
@@ -105,6 +107,7 @@ class RequestOrchestratorImpl implements RequestOrchestrator {
             sepIdx++;
             if (sepIdx === sectionIndex) {
               resolvedColorIndex = typeof child.attrs.colorIndex === "number" ? child.attrs.colorIndex : undefined;
+              resolvedSectionLabel = child.attrs.label || undefined;
             }
           }
         });
@@ -160,6 +163,9 @@ class RequestOrchestratorImpl implements RequestOrchestrator {
       response.__sectionIndex = resolvedSectionIndex;
       // First section (index 0) has no separator, default its color to 0
       response.__sectionColorIndex = resolvedColorIndex ?? 0;
+      if (resolvedSectionLabel) {
+        response.__sectionLabel = resolvedSectionLabel;
+      }
     }
 
     // Step 3: Process response through plugin chain

@@ -3,18 +3,21 @@
  *
  * Visual divider that splits a .void document into independent request sections.
  * Each section between separators has its own scope for endpoint, headers, body, etc.
- * Stores a `colorIndex` attribute that determines the section's indicator color.
+ * Stores a `colorIndex` attribute for section color and a `label` for the section name.
  */
 
 import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewProps, ReactNodeViewRenderer, NodeViewWrapper } from "@tiptap/react";
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, useCallback } from "react";
 import { getSectionLineColor } from "../extensions/sectionIndicator";
 
 const RequestSeparatorView = (props: NodeViewProps) => {
-  const { node } = props;
+  const { node, updateAttributes, editor } = props;
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [decorationColor, setDecorationColor] = useState<string | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Read section color from decoration data attribute (set by sectionIndicator plugin)
   useEffect(() => {
@@ -36,10 +39,23 @@ const RequestSeparatorView = (props: NodeViewProps) => {
     return () => observer.disconnect();
   }, []);
 
-  // Use decoration color if available, otherwise derive from stored colorIndex
   const colorIndex = typeof node.attrs.colorIndex === "number" ? node.attrs.colorIndex : 0;
   const lineColor = decorationColor ?? getSectionLineColor(colorIndex);
   const textColor = decorationColor ?? getSectionLineColor(colorIndex);
+  const label = node.attrs.label || "New Request";
+
+  const startEditing = useCallback(() => {
+    if (!editor.isEditable) return;
+    setEditValue(label === "New Request" ? "" : label);
+    setIsEditing(true);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }, [label, editor.isEditable]);
+
+  const commitEdit = useCallback(() => {
+    const trimmed = editValue.trim();
+    updateAttributes({ label: trimmed || "New Request" });
+    setIsEditing(false);
+  }, [editValue, updateAttributes]);
 
   return (
     <NodeViewWrapper>
@@ -62,18 +78,62 @@ const RequestSeparatorView = (props: NodeViewProps) => {
             borderTop: `2px dashed ${lineColor}`,
           }}
         />
-        <span
-          style={{
-            fontSize: "10px",
-            fontWeight: 700,
-            letterSpacing: "1.5px",
-            textTransform: "uppercase",
-            color: textColor,
-            whiteSpace: "nowrap",
-          }}
-        >
-          New Request
-        </span>
+        {isEditing ? (
+          <input
+            ref={inputRef}
+            type="text"
+            value={editValue}
+            placeholder="New Request"
+            onChange={(e) => setEditValue(e.target.value)}
+            onBlur={commitEdit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitEdit();
+              }
+              if (e.key === "Escape") {
+                setIsEditing(false);
+              }
+              // Prevent ProseMirror from handling these keys
+              e.stopPropagation();
+            }}
+            style={{
+              fontSize: "10px",
+              fontWeight: 700,
+              letterSpacing: "1.5px",
+              textTransform: "uppercase",
+              color: textColor,
+              whiteSpace: "nowrap",
+              background: "var(--editor-bg, transparent)",
+              border: `1px solid ${lineColor}`,
+              borderRadius: "3px",
+              padding: "2px 8px",
+              outline: "none",
+              textAlign: "center",
+              minWidth: "80px",
+              maxWidth: "200px",
+              fontFamily: "inherit",
+            }}
+          />
+        ) : (
+          <span
+            onDoubleClick={startEditing}
+            title="Double-click to rename"
+            style={{
+              fontSize: "10px",
+              fontWeight: 700,
+              letterSpacing: "1.5px",
+              textTransform: "uppercase",
+              color: textColor,
+              whiteSpace: "nowrap",
+              cursor: editor.isEditable ? "text" : "default",
+              padding: "2px 4px",
+              borderRadius: "3px",
+            }}
+          >
+            {label}
+          </span>
+        )}
         <div
           style={{
             flex: 1,
@@ -99,6 +159,9 @@ export const RequestSeparatorNode = Node.create({
     return {
       colorIndex: {
         default: 0,
+      },
+      label: {
+        default: "New Request",
       },
     };
   },

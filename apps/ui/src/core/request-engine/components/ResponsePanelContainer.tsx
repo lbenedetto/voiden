@@ -174,6 +174,7 @@ export function ResponsePanelContainer() {
       protocol: responseDoc.attrs.protocol,
       sectionIndex: responseDoc.attrs.sectionIndex,
       sectionColorIndex: responseDoc.attrs.sectionColorIndex,
+      sectionLabel: responseDoc.attrs.sectionLabel,
     };
   }, [responseDoc]);
 
@@ -442,6 +443,20 @@ export function ResponsePanelContainer() {
                     {statusInfo.statusCode} {statusInfo.statusMessage}
                   </span>
                 </div>
+
+                {statusInfo.sectionLabel && statusInfo.sectionLabel !== "New Request" && (
+                  <span
+                    className="text-xs font-semibold uppercase flex-shrink-0"
+                    style={{
+                      color: statusInfo.sectionColorIndex !== undefined
+                        ? getSectionBorderColor(statusInfo.sectionColorIndex)
+                        : "var(--comment)",
+                      letterSpacing: "0.5px",
+                    }}
+                  >
+                    {statusInfo.sectionLabel}
+                  </span>
+                )}
 
                 {!responseDoc.wsId && (
                   <span className="text-comment flex-shrink-0">{formatTime(statusInfo.elapsedTime)}</span>
