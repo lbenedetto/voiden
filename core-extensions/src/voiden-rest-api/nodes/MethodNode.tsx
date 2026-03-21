@@ -26,8 +26,8 @@ const preventEnter = (editor: Editor) => {
 // Factory function to create MethodNode with context hooks
 export const createMethodNode = (useSendRestRequest: any) => {
   const MethodNodeView = (props: NodeViewProps) => {
-    const { node, editor } = props;
-    const { refetch } = useSendRestRequest(editor);
+    const { node, editor, getPos } = props;
+    const { refetchFromElement } = useSendRestRequest(editor);
 
     const method = node.attrs.method;
 
@@ -45,8 +45,11 @@ export const createMethodNode = (useSendRestRequest: any) => {
           />
           <button
             className="flex items-center justify-center w-7 h-7 rounded-md border hover:bg-hover text-status-success transition-colors"
-            onClick={() => {
-              refetch();
+            onClick={(e) => {
+              // Set cursor in the main editor using DOM position of the clicked button.
+              // This is critical for imported blocks where getPos() returns a position
+              // in the linked block's internal doc, not the main document.
+              refetchFromElement(e.currentTarget as HTMLElement);
             }}
             style={{ borderColor: 'var(--ui-line)', cursor: 'pointer', userSelect: 'none' }}
           >

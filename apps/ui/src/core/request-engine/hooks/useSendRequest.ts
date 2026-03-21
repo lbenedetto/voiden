@@ -14,12 +14,18 @@ import { useResponseStore } from "../stores/responseStore";
 import { mapErrorToMessage } from "../utils/errorMessages";
 import { requestOrchestrator } from "../requestOrchestrator";
 import { toast } from "@/core/components/ui/sonner";
+import { useVoidenEditorStore } from "@/core/editors/voiden/VoidenEditor";
 
-export const  useSendRestRequest = (editor: Editor) => {
+export const  useSendRestRequest = (_editor: Editor) => {
+  // Always use the main VoidenEditor, not the passed editor.
+  // This is critical for imported/linked blocks whose editor prop
+  // points to the linked block's sub-editor, not the main document.
+  const editor = useVoidenEditorStore((state) => state.editor) ?? _editor;
   const { data: activeDocument } = useGetActiveDocument();
   const { openRightPanel } = usePanelStore();
   const activeEnv = useActiveEnvironment();
   const abortControllerRef = useRef<AbortController | null>(null);
+  const sectionIndexOverrideRef = useRef<number | undefined>(undefined);
   const queryClient = useQueryClient();
   const context = useQuery({
     queryKey: ["request", activeDocument?.id],
@@ -66,31 +72,34 @@ export const  useSendRestRequest = (editor: Editor) => {
         };
 
         // Determine which section to execute.
-        // ProseMirror's selection doesn't update when clicking inside node views
-        // (CodeMirror editors, linked blocks), so we also check the DOM's active
-        // element to find the correct section.
-        let sectionIndex: number | undefined;
-        const activeEl = document.activeElement;
-        const proseDom = editor.view.dom;
-        if (activeEl && proseDom.contains(activeEl)) {
-          // Walk up from activeElement to find its position among top-level children
-          let topLevelNode: Element | null = activeEl;
-          while (topLevelNode && topLevelNode.parentElement !== proseDom) {
-            topLevelNode = topLevelNode.parentElement;
-          }
-          if (topLevelNode) {
-            // Count separator nodes before this element
-            // TipTap node views have data-node-view-wrapper, and the inner div has data-type
-            let idx = 0;
-            let sibling = proseDom.firstElementChild;
-            while (sibling && sibling !== topLevelNode) {
-              const isSeparator =
-                sibling.getAttribute('data-type') === 'request-separator' ||
-                sibling.querySelector?.('[data-type="request-separator"]') !== null;
-              if (isSeparator) idx++;
-              sibling = sibling.nextElementSibling;
+        // If an override was set (e.g., from a play button click via refetchFromElement),
+        // use it directly. Otherwise detect from DOM or ProseMirror selection.
+        let sectionIndex: number | undefined = sectionIndexOverrideRef.current;
+        sectionIndexOverrideRef.current = undefined; // Clear after reading
+
+        if (sectionIndex === undefined) {
+          const activeEl = document.activeElement;
+          const proseDom = editor.view.dom;
+          if (activeEl && proseDom.contains(activeEl)) {
+            // Walk up from activeElement to find its position among top-level children
+            let topLevelNode: Element | null = activeEl;
+            while (topLevelNode && topLevelNode.parentElement !== proseDom) {
+              topLevelNode = topLevelNode.parentElement;
             }
-            sectionIndex = idx;
+            if (topLevelNode) {
+              // Count separator nodes before this element
+              // TipTap node views have data-node-view-wrapper, and the inner div has data-type
+              let idx = 0;
+              let sibling = proseDom.firstElementChild;
+              while (sibling && sibling !== topLevelNode) {
+                const isSeparator =
+                  sibling.getAttribute('data-type') === 'request-separator' ||
+                  sibling.querySelector?.('[data-type="request-separator"]') !== null;
+                if (isSeparator) idx++;
+                sibling = sibling.nextElementSibling;
+              }
+              sectionIndex = idx;
+            }
           }
         }
         // Fallback to ProseMirror selection
@@ -154,6 +163,34 @@ export const  useSendRestRequest = (editor: Editor) => {
         abortControllerRef.current.abort();
         abortControllerRef.current = null;
       }
+    },
+    refetchFromElement: (element: HTMLElement) => {
+      // Compute section index by walking up from the clicked element to find
+      // its top-level ProseMirror ancestor, then counting separators before it.
+      // This works for both regular nodes and imported/linked blocks because
+      // the DOM tree always leads to the main editor's top-level children.
+      try {
+        const proseDom = editor.view.dom;
+        let topLevelNode: HTMLElement | null = element;
+        while (topLevelNode && topLevelNode.parentElement !== proseDom) {
+          topLevelNode = topLevelNode.parentElement;
+        }
+        if (topLevelNode) {
+          let idx = 0;
+          let sibling = proseDom.firstElementChild;
+          while (sibling && sibling !== topLevelNode) {
+            const isSeparator =
+              sibling.getAttribute('data-type') === 'request-separator' ||
+              sibling.querySelector?.('[data-type="request-separator"]') !== null;
+            if (isSeparator) idx++;
+            sibling = sibling.nextElementSibling;
+          }
+          sectionIndexOverrideRef.current = idx;
+        }
+      } catch {
+        // Ignore — section detection will fall back to cursor/DOM-based approach
+      }
+      context.refetch();
     },
   };
 };
