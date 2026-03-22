@@ -454,7 +454,7 @@ export async function sendRequestHybrid(
       const state= await window.electron?.state.get();
       const path = state.activeDirectory||'';
       let editorJson:JSONContent|undefined  = editor?.getJSON();
-      editorJson = await expandLinkedBlocksInDoc(editorJson);
+      editorJson = await expandLinkedBlocksInDoc(editorJson, { forceRefresh: true });
       const captureArray = await getRuntimeVariablesMap(editorJson,undefined);
       if(captureArray||[].length>0){
         await saveRuntimeVariables(requestState, {
@@ -507,7 +507,7 @@ export async function sendRequestHybrid(
     const state = await window.electron?.state.get();
     const path = state.activeDirectory || '';
     let editorJson: JSONContent | undefined = editor?.getJSON();
-    editorJson = await expandLinkedBlocksInDoc(editorJson);
+    editorJson = await expandLinkedBlocksInDoc(editorJson, { forceRefresh: true });
     const captureArray = await getRuntimeVariablesMap(editorJson, undefined);
     if (captureArray || [].length > 0) {
       await saveRuntimeVariables(requestState, responseState, captureArray, path);

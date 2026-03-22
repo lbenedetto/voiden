@@ -931,3 +931,60 @@ input[type="checkbox"]:disabled {
 #code-editor-container:hover {
   scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
+
+/* ─── Source sync indicator ─────────────────────────────────────────────── */
+.source-sync-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity 0.15s, background-color 0.15s;
+  position: relative;
+  vertical-align: middle;
+  margin-right: 4px;
+  float: left;
+  margin-top: 2px;
+}
+
+.source-sync-indicator:hover {
+  opacity: 1;
+  background-color: var(--ui-hover, rgba(255, 255, 255, 0.08));
+}
+
+.source-sync-indicator::before {
+  content: "";
+  display: block;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--editor-accent, #7aa2f7);
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+
+.source-sync-indicator::after {
+  content: attr(data-consumer-count);
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  font-size: 8px;
+  line-height: 1;
+  color: var(--editor-accent, #7aa2f7);
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.source-sync-indicator.source-sync-active::before {
+  border-color: var(--editor-green, #9ece6a);
+  background-color: var(--editor-green, #9ece6a);
+  animation: source-sync-pulse 0.6s ease-out;
+}
+
+@keyframes source-sync-pulse {
+  0% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.4); opacity: 0.6; }
+  100% { transform: scale(1); opacity: 1; }
+}

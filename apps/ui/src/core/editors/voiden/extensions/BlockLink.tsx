@@ -6,7 +6,7 @@ import { Tip } from "@/core/components/ui/Tip";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { parseMarkdown } from "@/core/editors/voiden/markdownConverter";
 import { useElectronEvent } from "@/core/providers";
-import { Link2, ExternalLink, Unlink } from "lucide-react";
+import { Link2, Unlink } from "lucide-react";
 
 // Helper to recursively find a block by uid.
 const findBlockByUid = (nodes: any[], blockUid: string): any | null => {
@@ -49,7 +49,6 @@ const useGetBlockContent = (blockUid: string, originalFile: string, editor: Edit
       }
       const nodes = parseMarkdown(markdown, editor.schema);
       const block = findBlockByUid(nodes.content, blockUid);
-      // console.debug("block", block);
       if (!block) {
         throw new Error(`Block with uid ${blockUid} not found`);
       }
@@ -60,21 +59,7 @@ const useGetBlockContent = (blockUid: string, originalFile: string, editor: Edit
   });
 };
 
-interface TooltipButtonProps {
-  title: string;
-  description?: string;
-  onClick: (e: React.MouseEvent) => void;
-}
-
-const TooltipButton: React.FC<TooltipButtonProps> = ({ title, description, onClick }) => (
-  <Tip label={description}>
-    <button onClick={onClick} className="text-comment hover:text-text px-1 py-0.5 hover:bg-active">
-      {title}
-    </button>
-  </Tip>
-);
-
-// Note: We now accept "getPos" from TipTap’s NodeView props.
+// Note: We now accept "getPos" from TipTap's NodeView props.
 const LinkedBlockNodeView = ({ node, editor, getPos }: any) => {
   const { blockUid, originalFile, type } = node.attrs;
   const queryClient = useQueryClient();
@@ -83,14 +68,7 @@ const LinkedBlockNodeView = ({ node, editor, getPos }: any) => {
   // Force a re-render of this node view whenever the query state changes.
   const [, forceUpdate] = useReducer((x) => x + 1, 0);
 
-  // Refresh strategy: Refetch on tab focus but keep UI smooth
-  // - refetchOnMount: true means refetch when tab is focused/mounted
-  // - staleTime: 0 means data is always stale, ensuring refetch happens
-  // - isLoading (not isFetching) prevents showing loading state during background refetches
-  // - Result: Fresh data on tab focus, but no flicker because cached data is shown during refetch
-  // - Block deletions/updates are handled by electron events below
-
-  // Clear the block from the store when it’s deleted.
+  // Clear the block from the store when it's deleted.
   useElectronEvent<{ uid: string }>("block:delete", (data) => {
     if (data.uid === blockUid) {
       removeBlock(data.uid);
@@ -99,7 +77,6 @@ const LinkedBlockNodeView = ({ node, editor, getPos }: any) => {
   });
 
   // Get block content via React Query.
-  // Use isLoading instead of isFetching to prevent flicker during background refetches
   // isLoading = true only for initial load, not background refetches
   const { data: content, isLoading, error } = useGetBlockContent(blockUid, originalFile, editor);
 
@@ -117,13 +94,11 @@ const LinkedBlockNodeView = ({ node, editor, getPos }: any) => {
     const activeProject = projects?.activeProject;
 
     if (!activeProject || !originalFile) {
-      // console.error(`No active project or original file for block uid: ${blockUid}`);
       return;
     }
 
     const absolutePath = await window.electron?.utils.pathJoin(activeProject, originalFile);
     if (!absolutePath) {
-      // console.error(`Failed to compute absolute path for original file: ${originalFile}`);
       return;
     }
 

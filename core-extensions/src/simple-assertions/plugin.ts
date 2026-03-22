@@ -144,7 +144,7 @@ export default function createSimpleAssertionsPlugin(context: PluginContext) {
               try {
                 // @ts-ignore - Path resolved at runtime in app context
                 const { expandLinkedBlocksInDoc } = await import(/* @vite-ignore */ '@/core/editors/voiden/utils/expandLinkedBlocks');
-                editorJson = await expandLinkedBlocksInDoc(editorJson);
+                editorJson = await expandLinkedBlocksInDoc(editorJson, { forceRefresh: true });
               } catch (error) {
                 console.warn("[Simple Assertions] Failed to expand linked blocks:", error);
                 // Continue with unexpanded JSON

@@ -321,7 +321,7 @@ const voidenRestApiPlugin = (context: PluginContext) => {
           // Expand any linked blocks so plugins can access their content
           // @ts-ignore - Path resolved at runtime in app context
           const { expandLinkedBlocksInDoc } = await import(/* @vite-ignore */ '@/core/editors/voiden/utils/expandLinkedBlocks');
-          editorJson = await expandLinkedBlocksInDoc(editorJson);
+          editorJson = await expandLinkedBlocksInDoc(editorJson, { forceRefresh: true });
 
           // Build request WITHOUT environment variables
           // Environment variables will be replaced securely in Electron (Stage 3)

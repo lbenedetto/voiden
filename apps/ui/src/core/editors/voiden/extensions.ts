@@ -19,6 +19,7 @@ import { AnyExtension, Extension, PasteRule } from "@tiptap/core";
 import Dropcursor from "@tiptap/extension-dropcursor";
 import { FileLink } from "./extensions/ExternalFile";
 import { LinkedBlock } from "./extensions/BlockLink";
+import { SourceSyncIndicator } from "./extensions/SourceSyncIndicator";
 import { autoCloseBrackets } from "./extensions/autocloseBrackets";
 import Link from "@tiptap/extension-link";
 import { CustomCode } from "./extensions/CustomCode";
@@ -200,6 +201,7 @@ export const voidenExtensions: AnyExtension[] = [
 
   FileLink,
   LinkedBlock,
+  SourceSyncIndicator,
 
   CopyExtension,
   PasteHandler,

@@ -2,17 +2,24 @@ import { JSONContent } from "@tiptap/core";
 import { useBlockContentStore } from "@/core/stores/blockContentStore";
 import { getQueryClient } from "@/main";
 
+interface ExpandOptions {
+  /** When true, bypass the store cache and always re-read from disk. Use at execution time. */
+  forceRefresh?: boolean;
+}
+
 /**
  * Recursively expands linkedBlock nodes in editor JSON to their actual content.
  * This allows plugins to process linked blocks as if they were direct blocks.
  *
  * @param json - The editor JSON content (can be a single node or document)
  * @param depth - Current recursion depth (for safety)
+ * @param options - Expansion options (e.g., forceRefresh for execution-time guarantee)
  * @returns The JSON with all linkedBlocks expanded to their actual content
  */
 export async function expandLinkedBlocks(
   json: JSONContent,
-  depth: number = 0
+  depth: number = 0,
+  options: ExpandOptions = {}
 ): Promise<JSONContent> {
   // Safety check to prevent infinite recursion
   if (depth > 10) {
@@ -31,11 +38,15 @@ export async function expandLinkedBlocks(
     }
 
     try {
-      // Try to get from store first (faster)
       const store = useBlockContentStore.getState();
-      let blockContent = store.blocks[blockUid];
+      let blockContent: any = null;
 
-      // If not in store, fetch it
+      // When forceRefresh is false, try the store cache first (faster for UI)
+      if (!options.forceRefresh) {
+        blockContent = store.blocks[blockUid];
+      }
+
+      // If not in store (or forceRefresh), fetch from disk
       if (!blockContent && originalFile) {
         const queryClient = getQueryClient();
         const projects = queryClient.getQueryData<{
@@ -62,7 +73,7 @@ export async function expandLinkedBlocks(
       }
 
       // Recursively expand the block content first
-      const expandedBlock = await expandLinkedBlocks(blockContent, depth + 1);
+      const expandedBlock = await expandLinkedBlocks(blockContent, depth + 1, options);
 
       // Mark the expanded block with importedFrom attribute to track its origin
       // This allows override logic to differentiate between imported and local blocks
@@ -83,7 +94,7 @@ export async function expandLinkedBlocks(
   // If this node has content array, recursively expand it
   if (json.content && Array.isArray(json.content)) {
     const expandedContent = await Promise.all(
-      json.content.map(child => expandLinkedBlocks(child, depth + 1))
+      json.content.map(child => expandLinkedBlocks(child, depth + 1, options))
     );
 
     return {
@@ -101,9 +112,11 @@ export async function expandLinkedBlocks(
  * This is the main entry point for processing editor JSON before passing to plugins.
  *
  * @param doc - The editor document JSON
+ * @param options - Expansion options. Pass { forceRefresh: true } at execution time
+ *                  to guarantee fresh content is read from disk.
  * @returns The document with all linkedBlocks expanded
  */
-export async function expandLinkedBlocksInDoc(doc: JSONContent): Promise<JSONContent> {
+export async function expandLinkedBlocksInDoc(doc: JSONContent, options: ExpandOptions = {}): Promise<JSONContent> {
   if (!doc.content || !Array.isArray(doc.content)) {
     return doc;
   }
@@ -111,7 +124,7 @@ export async function expandLinkedBlocksInDoc(doc: JSONContent): Promise<JSONCon
   const startTime = performance.now();
 
   const expandedContent = await Promise.all(
-    doc.content.map(node => expandLinkedBlocks(node))
+    doc.content.map(node => expandLinkedBlocks(node, 0, options))
   );
 
   const duration = performance.now() - startTime;

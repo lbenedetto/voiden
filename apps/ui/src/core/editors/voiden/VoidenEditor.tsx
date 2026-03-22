@@ -566,8 +566,15 @@ function sanitizeDoc(node: any): any {
   const validateAndParseContent = useCallback(
     (content: string, unsavedContent: string | undefined) => {
       // If there is no unsaved content and the provided content is empty, return empty doc
+      // with a separator so new files start with a consistent section header
       if (!unsavedContent && content.trim() === "") {
-        return { type: "doc", content: [] };
+        return {
+          type: "doc",
+          content: [
+            { type: "request-separator", attrs: { colorIndex: 0, label: "New Request" } },
+            { type: "paragraph" },
+          ],
+        };
       }
 
       try {
@@ -621,6 +628,7 @@ function sanitizeDoc(node: any): any {
         // Set the editor in the store
         editor.storage.panelId = panelId;
         editor.storage.tabId = tabId;
+        editor.storage.source = source;
         editor.storage.instanceId = crypto.randomUUID();
 
         const unsaved = useEditorStore.getState().unsaved[tabId];
