@@ -75,7 +75,7 @@ export default function createSocketPlugin(context: PluginContext) {
             name: "web-socket",
             label: "Web Socket",
             aliases: ['websocket', 'ws', "wss"],
-            singleton: true,
+            singleton: false,
             compareKeys: ["socket-request", "endpoint", "request"],
             slash: "/wss",
             description: "Insert Web Socket block",
@@ -86,7 +86,7 @@ export default function createSocketPlugin(context: PluginContext) {
           {
             name: "grpcs-socket",
             label: "gRPCS Socket",
-            singleton: true,
+            singleton: false,
             compareKeys: ["socket-request", "request", "endpoint"],
             aliases: ['grpcsocket', 'grpc', 'grpcs'],
             slash: "/grpcs",
@@ -240,6 +240,14 @@ export default function createSocketPlugin(context: PluginContext) {
               grpcId: response.grpcId || '',
             });
           }
+          // Forward section metadata for multi-request support
+          if (response.__sectionIndex !== undefined) {
+            responseDoc.attrs = responseDoc.attrs || {};
+            responseDoc.attrs.sectionIndex = response.__sectionIndex;
+            responseDoc.attrs.sectionColorIndex = response.__sectionColorIndex;
+            responseDoc.attrs.sectionLabel = response.__sectionLabel;
+          }
+
           await context.openVoidenTab(
             `connected`,
             responseDoc,
@@ -254,6 +262,11 @@ export default function createSocketPlugin(context: PluginContext) {
         try {
           // Get the JSON from the editor (linked blocks are already expanded by the orchestrator)
           const editorJson = editor.getJSON();
+
+          // Skip sections without a socket-request node (e.g. REST or GraphQL sections in multi-request files)
+          if (!editorJson.content?.some((n: any) => n.type === 'socket-request')) {
+            return request;
+          }
 
           // Skip GraphQL documents — the GraphQL plugin handles its own request building
           if (editorJson.content?.some((n: any) => n.type === 'gqlquery')) {
@@ -352,31 +365,22 @@ export default function createSocketPlugin(context: PluginContext) {
                 return false;
               }
 
-              // Confirm replacement if editor is not empty
+              // Multi-request support: if editor has existing content, add as a new section
               if (!editor.isEmpty) {
-                const commandType = /^websocat\s+/i.test(trimmedText) ? 'websocat' : 'grpcurl';
-                const proceed = window.confirm(`Pasting this ${commandType} request will replace the current content. Do you want to proceed?`);
-                if (!proceed) {
-                  return true; // Handled but cancelled
-                }
-              }
-
-              // Populate editor with socket request
-              updateEditorContent(editor, (editorJsonContent) => {
-                const requestBlocks = ["socket-request", "headers-table", "path-table", "query-table", "proto"];
-
-                // Clean up existing socket request nodes
-                editorJsonContent = editorJsonContent.filter((node: any) => {
-                  if (node.type === "endpoint") return false;
-                  if (node.type && requestBlocks.includes(node.type)) return false;
-                  return true;
+                updateEditorContent(editor, (editorJsonContent) => {
+                  // Add a request-separator before the new request
+                  editorJsonContent.push({ type: "request-separator", attrs: {} });
+                  // Add the converted socket request
+                  editorJsonContent.push(...(socketRequest || []));
+                  return insertParagraphAfterRequestBlocks(editorJsonContent);
                 });
-                // Add the converted socket request
-                editorJsonContent.push(...(socketRequest || []));
-
-                // Add paragraph after request blocks
-                return insertParagraphAfterRequestBlocks(editorJsonContent);
-              });
+              } else {
+                // Empty editor — just insert directly
+                updateEditorContent(editor, (editorJsonContent) => {
+                  editorJsonContent.push(...(socketRequest || []));
+                  return insertParagraphAfterRequestBlocks(editorJsonContent);
+                });
+              }
 
               return true;
             } catch (error) {
@@ -409,13 +413,12 @@ export default function createSocketPlugin(context: PluginContext) {
 
           if (!socketRequest || !editor) return false;
 
+          const hasContent = !editor.isEmpty;
           updateEditorContent(editor, (editorJsonContent: any[]) => {
-            const requestBlocks = ['socket-request', 'headers-table', 'path-table', 'query-table', 'proto'];
-            editorJsonContent = editorJsonContent.filter((node: any) => {
-              if (node.type === 'endpoint') return false;
-              if (node.type && requestBlocks.includes(node.type)) return false;
-              return true;
-            });
+            if (hasContent) {
+              // Multi-request: add separator before new request
+              editorJsonContent.push({ type: "request-separator", attrs: {} });
+            }
             editorJsonContent.push(...(socketRequest || []));
             return insertParagraphAfterRequestBlocks(editorJsonContent);
           });

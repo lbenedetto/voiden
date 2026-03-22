@@ -1,5 +1,14 @@
-import React, { useState } from 'react';
-import { ArrowUpRight, ArrowDownLeft, Radio, AlertCircle, Wifi, WifiOff } from 'lucide-react';
+/**
+ * Socket History Renderer
+ *
+ * Renders completed WebSocket and gRPC sessions in the history panel.
+ * Uses shared StreamingUI components for consistent rendering.
+ */
+
+import React from 'react';
+import { StreamItem, StreamMessageRow, StreamEventRow, formatDataSimple } from './StreamingUI';
+
+// ── Types ──────────────────────────────────────────────────────────────────────
 
 interface HistoryEntry {
   request: {
@@ -20,8 +29,6 @@ interface HistoryEntry {
   };
 }
 
-// ── Types ──────────────────────────────────────────────────────────────────────
-
 type WsItem =
   | { kind: 'system-open'; ts: number; url?: string | null }
   | { kind: 'system-close'; ts: number; code?: number; reason?: string }
@@ -40,28 +47,51 @@ type GrpcItem =
   | { kind: 'stream-closed'; ts: number }
   | { kind: 'unary-response'; ts: number; data: any; duration?: number };
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── Normalize ──────────────────────────────────────────────────────────────────
 
-function formatTime(ts: number): string {
-  try {
-    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  } catch {
-    return '';
-  }
-}
-
-function formatData(data: any): { text: string; isJson: boolean } {
-  if (data === undefined || data === null) return { text: '', isJson: false };
-  if (typeof data === 'string') {
-    try {
-      const parsed = JSON.parse(data);
-      return { text: JSON.stringify(parsed, null, 2), isJson: true };
-    } catch {
-      return { text: data, isJson: false };
+function normalizeWsItems(items: WsItem[]): StreamItem[] {
+  return items.map((it): StreamItem => {
+    switch (it.kind) {
+      case 'system-open':
+        return { type: 'event', item: { kind: 'connected', ts: it.ts, message: `Connected${it.url ? ' · ' + it.url : ''}` } };
+      case 'system-close':
+        return { type: 'event', item: { kind: 'disconnected', ts: it.ts, message: `Closed${it.reason ? ' · ' + it.reason : ''}${it.code ? ` · code ${it.code}` : ''}` } };
+      case 'system-error':
+        return { type: 'event', item: { kind: 'error', ts: it.ts, message: `Error: ${it.message}` } };
+      case 'system-pause':
+        return { type: 'event', item: { kind: 'paused', ts: it.ts, message: `Paused${it.reason ? ' · ' + it.reason : ''}` } };
+      case 'sent':
+        return { type: 'message', item: { direction: 'sent', ts: it.ts, data: it.data } };
+      case 'recv':
+        return { type: 'message', item: { direction: 'received', ts: it.ts, data: it.data } };
     }
-  }
-  return { text: JSON.stringify(data, null, 2), isJson: true };
+  });
 }
+
+function normalizeGrpcItems(items: GrpcItem[]): StreamItem[] {
+  return items.map((it): StreamItem => {
+    switch (it.kind) {
+      case 'stream-open':
+        return { type: 'event', item: { kind: 'connected', ts: it.ts, message: `Stream opened${it.method ? ' · ' + it.method : ''}` } };
+      case 'stream-data':
+        return { type: 'message', item: { direction: it.type === 'request' ? 'sent' : 'received', ts: it.ts, data: it.data, label: it.type === 'request' ? 'request' : 'response' } };
+      case 'stream-response':
+        return { type: 'message', item: { direction: 'received', ts: it.ts, data: it.data, label: 'response' } };
+      case 'unary-response':
+        return { type: 'message', item: { direction: 'received', ts: it.ts, data: it.data, label: it.duration ? `response · ${it.duration}ms` : 'response' } };
+      case 'stream-error':
+        return { type: 'event', item: { kind: 'error', ts: it.ts, message: `Error: ${it.error}${it.details ? ' · ' + it.details : ''}${it.code !== undefined ? ` (${it.code})` : ''}` } };
+      case 'stream-end':
+        return { type: 'event', item: { kind: 'ended', ts: it.ts, message: `Stream ended${it.reason ? ' · ' + it.reason : ''}` } };
+      case 'stream-cancelled':
+        return { type: 'event', item: { kind: 'cancelled', ts: it.ts, message: 'Stream cancelled' } };
+      case 'stream-closed':
+        return { type: 'event', item: { kind: 'disconnected', ts: it.ts, message: 'Stream closed' } };
+    }
+  });
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
 function parseMessages(body: string | undefined): any[] {
   if (!body) return [];
@@ -73,111 +103,35 @@ function parseMessages(body: string | undefined): any[] {
   }
 }
 
-// ── Message bubble ─────────────────────────────────────────────────────────────
-
-function MessageBubble({
-  direction,
-  ts,
-  data,
-  label,
-}: {
-  direction: 'sent' | 'received';
-  ts: number;
-  data: any;
-  label?: string;
-}) {
-  const [expanded, setExpanded] = useState(true);
-  const { text, isJson } = formatData(data);
-  const isSent = direction === 'sent';
-  const lines = text.split('\n');
-  const isLong = lines.length > 8;
-
-  return (
-    <div className={`flex flex-col gap-0.5 ${isSent ? 'items-end' : 'items-start'}`}>
-      <div className="flex items-center gap-1">
-        {isSent ? (
-          <ArrowUpRight size={9} className="text-blue-400" />
-        ) : (
-          <ArrowDownLeft size={9} className="text-green-400" />
-        )}
-        <span className="text-[9px] text-comment font-mono">{label ?? (isSent ? 'sent' : 'recv')} · {formatTime(ts)}</span>
-      </div>
-      <div
-        className={`relative rounded px-2 py-1.5 text-[10px] font-mono break-all max-w-full w-full
-          ${isSent ? 'bg-blue-500/10 text-blue-200 border border-blue-500/20' : 'bg-green-500/10 text-green-200 border border-green-500/20'}
-          ${isLong ? 'cursor-pointer' : ''}`}
-        onClick={() => isLong && setExpanded((v) => !v)}
-      >
-        <pre className={`whitespace-pre-wrap break-all text-[10px] leading-relaxed ${isLong && !expanded ? 'line-clamp-4' : ''}`}>
-          {text || <span className="italic text-comment">empty</span>}
-        </pre>
-        {isLong && (
-          <span className="text-[9px] text-comment absolute bottom-1 right-2">
-            {expanded ? '▲ collapse' : '▼ expand'}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── System event row ───────────────────────────────────────────────────────────
-
-function SystemRow({ icon, text, ts, variant = 'default' }: {
-  icon: React.ReactNode;
-  text: string;
-  ts?: number;
-  variant?: 'default' | 'error' | 'success';
-}) {
-  const color = variant === 'error' ? 'text-red-400' : variant === 'success' ? 'text-green-400' : 'text-comment';
-  return (
-    <div className={`flex items-center gap-1.5 py-1 px-1 text-[9px] font-mono ${color}`}>
-      {icon}
-      <span className="flex-1 truncate">{text}</span>
-      {ts !== undefined && <span className="text-[9px] text-comment shrink-0">{formatTime(ts)}</span>}
-    </div>
-  );
-}
-
-// ── WebSocket renderer ─────────────────────────────────────────────────────────
+// ── Renderers ──────────────────────────────────────────────────────────────────
 
 function WsRenderer({ messages }: { messages: WsItem[] }) {
+  const items = normalizeWsItems(messages);
   const dataMessages = messages.filter((m) => m.kind === 'sent' || m.kind === 'recv');
-  const total = dataMessages.length;
 
   return (
-    <div className="space-y-1.5">
-      {messages.map((item, i) => {
-        switch (item.kind) {
-          case 'system-open':
-            return <SystemRow key={i} icon={<Wifi size={9} />} text="Connected" ts={item.ts} variant="success" />;
-          case 'system-close':
-            return <SystemRow key={i} icon={<WifiOff size={9} />} text={`Closed${item.reason ? ` · ${item.reason}` : ''}${item.code ? ` (${item.code})` : ''}`} ts={item.ts} />;
-          case 'system-error':
-            return <SystemRow key={i} icon={<AlertCircle size={9} />} text={item.message} ts={item.ts} variant="error" />;
-          case 'system-pause':
-            return <SystemRow key={i} icon={<Radio size={9} />} text={`Paused${item.reason ? ` · ${item.reason}` : ''}`} ts={item.ts} />;
-          case 'sent':
-            return <MessageBubble key={i} direction="sent" ts={item.ts} data={item.data} />;
-          case 'recv':
-            return <MessageBubble key={i} direction="received" ts={item.ts} data={item.data} />;
-          default:
-            return null;
+    <div>
+      {items.map((si, i) => {
+        if (si.type === 'event') {
+          return <StreamEventRow key={i} event={si.item} />;
         }
+        return <StreamMessageRow key={i} message={si.item} />;
       })}
-      {total === 0 && <p className="text-[10px] text-comment italic px-1">No messages exchanged</p>}
+      {dataMessages.length === 0 && (
+        <p className="text-[10px] text-comment italic px-[10px] py-1">No messages exchanged</p>
+      )}
     </div>
   );
 }
 
-// ── gRPC renderer ──────────────────────────────────────────────────────────────
-
 function GrpcRenderer({ messages, grpcMeta }: { messages: GrpcItem[]; grpcMeta?: any }) {
+  const items = normalizeGrpcItems(messages);
+
   return (
-    <div className="space-y-1.5">
+    <div>
       {/* gRPC method info */}
       {grpcMeta?.service && (
-        <div className="text-[9px] font-mono text-comment bg-muted/40 rounded px-2 py-1 flex items-center gap-1.5 flex-wrap">
+        <div className="text-[9px] font-mono text-comment bg-muted/40 rounded px-2 py-1 mx-[10px] mt-1 flex items-center gap-1.5 flex-wrap">
           <span className="text-accent">{grpcMeta.package ? `${grpcMeta.package}.${grpcMeta.service}` : grpcMeta.service}</span>
           <span>/</span>
           <span className="text-text">{grpcMeta.method}</span>
@@ -187,49 +141,17 @@ function GrpcRenderer({ messages, grpcMeta }: { messages: GrpcItem[]; grpcMeta?:
         </div>
       )}
 
-      {messages.map((item, i) => {
-        switch (item.kind) {
-          case 'stream-open':
-            return <SystemRow key={i} icon={<Wifi size={9} />} text={`Stream opened${item.method ? ` · ${item.method}` : ''}`} ts={item.ts} variant="success" />;
-          case 'stream-data':
-            return (
-              <MessageBubble
-                key={i}
-                direction={item.type === 'request' ? 'sent' : 'received'}
-                ts={item.ts}
-                data={item.data}
-                label={item.type === 'request' ? 'request' : 'response'}
-              />
-            );
-          case 'stream-response':
-            return <MessageBubble key={i} direction="received" ts={item.ts} data={item.data} label="response" />;
-          case 'unary-response':
-            return <MessageBubble key={i} direction="received" ts={item.ts} data={item.data} label={item.duration ? `response · ${item.duration}ms` : 'response'} />;
-          case 'stream-error':
-            return (
-              <SystemRow
-                key={i}
-                icon={<AlertCircle size={9} />}
-                text={`Error: ${item.error}${item.details ? ` · ${item.details}` : ''}${item.code !== undefined ? ` (${item.code})` : ''}`}
-                ts={item.ts}
-                variant="error"
-              />
-            );
-          case 'stream-end':
-            return <SystemRow key={i} icon={<WifiOff size={9} />} text={`Stream ended${item.reason ? ` · ${item.reason}` : ''}`} ts={item.ts} />;
-          case 'stream-cancelled':
-            return <SystemRow key={i} icon={<WifiOff size={9} />} text="Stream cancelled" ts={item.ts} />;
-          case 'stream-closed':
-            return <SystemRow key={i} icon={<WifiOff size={9} />} text="Stream closed" ts={item.ts} />;
-          default:
-            return null;
+      {items.map((si, i) => {
+        if (si.type === 'event') {
+          return <StreamEventRow key={i} event={si.item} />;
         }
+        return <StreamMessageRow key={i} message={si.item} />;
       })}
     </div>
   );
 }
 
-// ── Main export ────────────────────────────────────────────────────────────────
+// ── Main Export ─────────────────────────────────────────────────────────────────
 
 export function SocketHistoryRenderer({ entry }: { entry: HistoryEntry }) {
   const method = (entry.request.method ?? '').toUpperCase();
@@ -237,9 +159,9 @@ export function SocketHistoryRenderer({ entry }: { entry: HistoryEntry }) {
   const messages = parseMessages(entry.response.body);
 
   return (
-    <div className="space-y-1.5 max-h-72 overflow-y-auto pr-0.5">
+    <div className="max-h-72 overflow-y-auto pr-0.5">
       {entry.response.error && (
-        <div className="text-[10px] text-red-400 bg-red-500/10 rounded px-2 py-1.5 break-all">
+        <div className="text-[10px] text-red-400 bg-red-500/10 rounded px-2 py-1.5 mx-[10px] mt-1 break-all">
           {entry.response.error}
         </div>
       )}
