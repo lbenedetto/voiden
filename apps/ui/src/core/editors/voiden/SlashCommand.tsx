@@ -10,6 +10,7 @@ import { icons } from "lucide-react";
 
 import { useEditorEnhancementStore } from "@/plugins";
 import { pickDistinctColorIndex } from "./extensions/sectionIndicator";
+import { getRandomRequestName, getUsedNamesFromDoc } from "./lib/requestNames";
 
 const GROUPS: Group[] = [
   {
@@ -142,17 +143,21 @@ const GROUPS: Group[] = [
           });
 
           const colorIndex = pickDistinctColorIndex(prevColorIndex, nextColorIndex);
+          const usedNames = getUsedNamesFromDoc(editor);
 
           if (!hasSeparators) {
             // First separator being added — also add one for the existing first section
             const firstSectionColorIndex = pickDistinctColorIndex(-1, colorIndex);
+            const firstName = getRandomRequestName(usedNames);
+            const secondName = getRandomRequestName([...usedNames, firstName]);
+
             editor.chain().focus()
               .command(({ dispatch, tr, state }) => {
                 if (dispatch) {
                   // Insert separator for the first section at position 0
                   const firstSep = state.schema.nodes['request-separator'].create({
                     colorIndex: firstSectionColorIndex,
-                    label: 'Request 1',
+                    label: firstName,
                   });
                   tr.insert(0, firstSep);
                 }
@@ -162,13 +167,14 @@ const GROUPS: Group[] = [
               // Positions shifted by the inserted first separator's size
               .deleteRange({ from: from + 2, to: to + 2 })
               .insertContent([
-                { type: "request-separator", attrs: { colorIndex } },
+                { type: "request-separator", attrs: { colorIndex, label: secondName } },
                 { type: "paragraph" },
               ])
               .run();
           } else {
+            const newName = getRandomRequestName(usedNames);
             editor.chain().focus().deleteRange({ from, to }).insertContent([
-              { type: "request-separator", attrs: { colorIndex } },
+              { type: "request-separator", attrs: { colorIndex, label: newName } },
               { type: "paragraph" },
             ]).run();
           }

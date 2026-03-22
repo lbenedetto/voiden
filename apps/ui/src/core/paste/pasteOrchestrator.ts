@@ -28,6 +28,7 @@ import type {
   ExtensionContext
 } from '@voiden/sdk/ui';
 import { pasteLogger } from '@/core/lib/logger';
+import { getRandomRequestName } from '@/core/editors/voiden/lib/requestNames';
 
 const md = markdownIt({ html: false });
 
@@ -207,7 +208,7 @@ export class PasteOrchestrator {
           // Insert a request-separator first to create a proper section
           const separatorType = schema.nodes['request-separator'];
           if (separatorType) {
-            const separator = separatorType.create({ label: 'Linked Request' });
+            const separator = separatorType.create({ label: getRandomRequestName() });
             tr.insert(insertPos + offset, separator);
             offset += separator.nodeSize;
           }
@@ -260,7 +261,7 @@ export class PasteOrchestrator {
           // Insert a request-separator first to create a proper section
           const separatorType = schema.nodes['request-separator'];
           if (separatorType) {
-            const separator = separatorType.create({ label: 'Pasted Request' });
+            const separator = separatorType.create({ label: getRandomRequestName() });
             tr.insert(insertPos + offset, separator);
             offset += separator.nodeSize;
           }
