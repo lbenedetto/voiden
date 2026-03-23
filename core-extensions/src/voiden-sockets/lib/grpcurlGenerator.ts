@@ -32,7 +32,7 @@ export const generateGrpcurlCommand = (data: GrpcRequestData): string => {
   const parts: string[] = ['grpcurl'];
 
   const url = data.url || '';
-  if (!url || !data.grpc?.service || !data.grpc?.method) {
+  if (!url) {
     return '';
   }
 
@@ -74,16 +74,16 @@ export const generateGrpcurlCommand = (data: GrpcRequestData): string => {
     parts.push(`-d '{}'`);
   }
 
-  // Add service and method
-  const fullMethod = data.grpc?.package
-    ? `${data.grpc.package}.${data.grpc.service}/${data.grpc.method}`
-    : `${data.grpc?.service}/${data.grpc?.method}`;
-
   // Add server address
   parts.push(`${url}`);
 
-  // Add full method name
-  parts.push(fullMethod);
+  // Add service/method if present
+  if (data.grpc?.service || data.grpc?.method) {
+    const fullMethod = data.grpc?.package
+      ? `${data.grpc.package}.${data.grpc.service}/${data.grpc.method}`
+      : `${data.grpc?.service}/${data.grpc?.method}`;
+    parts.push(fullMethod);
+  }
 
   return parts.join(' ');
 };
