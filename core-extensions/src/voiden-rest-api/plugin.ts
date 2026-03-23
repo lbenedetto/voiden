@@ -15,7 +15,7 @@ import { createResponseBodyNode } from './nodes/ResponseBodyNode';
 import manifest from './manifest.json';
 import React from 'react';
 import { createResponseDocNode } from './nodes/ResponseDocNode';
-import { CopyCurlButton } from './components/CopyCurlButton';
+// CopyCurlButton available inline on MethodNode — top-bar action removed
 
 type EditorTab = { title?: string; content?: string; tabId?: string };
 
@@ -296,50 +296,8 @@ const voidenRestApiPlugin = (context: PluginContext) => {
         ],
       });
 
-      // Register Copy cURL action
-      context.registerEditorAction({
-        id: "copy-curl-button",
-        component: (props: any) =>
-          React.createElement(CopyCurlButton, {
-            tab: props?.tab,
-            context: context
-          }),
-        predicate: (tab) => {
-          const name = tab?.title?.toLowerCase() || "";
-          if (!name.endsWith(".void")) return false;
-
-          let content = tab?.content || "";
-          // If unsaved content exists, use it exclusively as the source of truth
-          const store = getEditorStore();
-          if (tab?.tabId && store) {
-            const unsaved = store.getState().unsaved[tab.tabId];
-            if (unsaved) {
-              try {
-                const doc = JSON.parse(unsaved);
-                return doc?.content?.some((node: any) =>
-                  node.type === 'api' || node.type === 'request'
-                ) ?? false;
-              } catch {
-                return false;
-              }
-            }
-          }
-
-          // No unsaved content — fall back to saved file content
-          if (typeof content !== 'string' || content.trim().length === 0) return false;
-
-          try {
-            const fenceRegex = /```\s*void([\s\S]*?)```/gi;
-            let match;
-            while ((match = fenceRegex.exec(content)) !== null) {
-              if (/type:\s*request/i.test(match[1] || '')) return true;
-            }
-            return false;
-          } catch {
-            return false;
-          }
-        },
-      });
+      // Copy cURL button is available inline next to the endpoint (MethodNode)
+      // Top-bar action removed to avoid duplication
 
 
 
