@@ -14,7 +14,7 @@
         "Stop-on-failure — optionally halt the run on the first file or assertion failure",
         "Variable isolation — each file can run with a clean variable scope or share state across the run",
         "Configurable delay between files — add a pause between sequential executions",
-        "Environment selector — choose which environment to use for the stitch run",
+        "Environment selector — choose which environment to use for the stitch run"
       ]
     }
   },
