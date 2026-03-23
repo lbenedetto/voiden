@@ -539,6 +539,8 @@ export class PasteOrchestrator {
     const hasBold = /\*\*.+\*\*/.test(text) || /__.+__/.test(text);
     const hasItalic = /\*.+\*/.test(text) || /_.+_/.test(text);
     const hasBlockquotes = /^>/m.test(text);
+    // GFM table: header row with |, separator row with |---
+    const hasTable = /^\|.+\|$/m.test(text) && /^\|[\s\-:|]+\|$/m.test(text);
 
     // Count how many markdown features are present
     const features = [
@@ -548,8 +550,12 @@ export class PasteOrchestrator {
       hasLinks,
       hasBold,
       hasItalic,
-      hasBlockquotes
+      hasBlockquotes,
+      hasTable,
     ].filter(Boolean).length;
+
+    // Tables are unambiguous — treat as markdown even if it's the only feature
+    if (hasTable) return true;
 
     // Only treat as markdown if it has 2 or more markdown features
     // This prevents plain text with incidental characters from being parsed as markdown
