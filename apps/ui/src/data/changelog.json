@@ -1,5 +1,29 @@
 [
   {
+    "version": "v1.4.1-beta.1",
+    "date": "23/03/2026",
+    "title": "Stitch — Workflow Runner",
+    "description": "Beta release introducing Stitch, a dedicated workflow runner for batch-executing multiple .void files sequentially with aggregated assertion results, a separate response panel, and full execution control.",
+    "icon": "Workflow",
+    "iconColor": "text-emerald-400",
+    "bgColor": "bg-gradient-to-br from-emerald-900 to-teal-900",
+    "changes": {
+      "Added": [
+        "Stitch — workflow runner for batch-executing multiple .void files sequentially via the /stitch slash command",
+        "Glob pattern include/exclude — configure which .void files to run using glob patterns",
+        "Stop-on-failure — optionally halt the run on the first file or assertion failure",
+        "Variable isolation — each file can run with a clean variable scope or share state across the run",
+        "Configurable delay between files — add a pause between sequential executions",
+        "Environment selector — choose which environment to use for the stitch run",
+        "Abort/cancel support — cancel a running stitch mid-execution",
+        "Dedicated Stitch response panel — separate results panel with per-file pass/fail status, assertion counts, and timing",
+        "Section-level breakdown — each file's result shows individual request section outcomes with status codes and durations",
+        "Request/response inspection — expand any section result to view headers, body, and full response details",
+        "cURL copy — copy the request for any section as a cURL command directly from the results panel"
+      ]
+    }
+  },
+  {
     "version": "v1.4.0-beta.1",
     "date": "23/03/2026",
     "title": "Multi-Request, Streaming UI & Unified Search",
