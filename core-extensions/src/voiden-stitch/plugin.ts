@@ -15,7 +15,7 @@ export default function createVoidenStitchPlugin(context: any) {
       // Import useActiveEnvironment hook via dynamic Vite import
       // The StitchNodeView is a React component so it can call hooks
       // @ts-ignore - Vite dynamic import
-      const { useActiveEnvironment } = await import(/* @vite-ignore */ '@/core/environment/hooks') as any;
+      const { useActiveEnvironment, useEnvironments } = await import(/* @vite-ignore */ '@/core/environment/hooks') as any;
 
       // Open the stitch results sidebar tab
       const openResultsTab = () => {
@@ -29,6 +29,7 @@ export default function createVoidenStitchPlugin(context: any) {
         NodeViewWrapper,
         RequestBlockHeader,
         useActiveEnvironment,
+        useEnvironments,
         openResultsTab,
       );
 

@@ -14,6 +14,8 @@ export interface StitchConfig {
   delayBetweenFiles: number;
   /** Reset runtime variables between files (each file starts clean) */
   isolateFiles: boolean;
+  /** Environment to use (empty = active environment) */
+  environment: string;
 }
 
 /** Result for a single request section within a file */
@@ -29,6 +31,20 @@ export interface StitchSectionResult {
     passed: number;
     failed: number;
     results: AssertionResult[];
+  };
+  /** Request/response details for inspection */
+  requestInfo?: {
+    method: string;
+    url: string;
+    headers?: Array<{ key: string; value: string }>;
+    body?: string;
+    bodySize?: number;
+  };
+  responseInfo?: {
+    headers?: Array<{ key: string; value: string }>;
+    body?: string;
+    bodySize?: number;
+    contentType?: string;
   };
 }
 

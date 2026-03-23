@@ -15,12 +15,15 @@ function matchGlob(pattern: string, filePath: string): boolean {
   const f = filePath.replace(/\\/g, '/');
 
   // Convert glob pattern to regex
+  // Handle **/ as "zero or more directory segments" (including no directory)
   const regexStr = p
     .replace(/[.+^${}()|[\]]/g, '\\$&')  // escape special regex chars (not * and ?)
-    .replace(/\*\*/g, '{{GLOBSTAR}}')
-    .replace(/\*/g, '[^/]*')
-    .replace(/\?/g, '[^/]')
-    .replace(/\{\{GLOBSTAR\}\}/g, '.*');
+    .replace(/\/\*\*\//g, '{{SLASHGLOBSTARSLASH}}')  // /**/  → matches / or /any/path/
+    .replace(/\*\*/g, '{{GLOBSTAR}}')                 // **    → matches anything
+    .replace(/\*/g, '[^/]*')                           // *     → matches within a segment
+    .replace(/\?/g, '[^/]')                            // ?     → single char
+    .replace(/\{\{SLASHGLOBSTARSLASH\}\}/g, '(?:/|/.*/)')  // zero or more dirs
+    .replace(/\{\{GLOBSTAR\}\}/g, '.*');                    // anything
 
   return new RegExp(`^${regexStr}$`).test(f);
 }
@@ -33,6 +36,8 @@ function matchesAny(patterns: string[], relativePath: string): boolean {
 interface EngineContext {
   /** The currently active environment variables */
   activeEnv: Record<string, string> | undefined;
+  /** All environments data for environment override */
+  allEnvs?: { data: Record<string, Record<string, string>> };
   /** Callback to open the results sidebar tab */
   openResultsTab: () => void;
 }
@@ -119,7 +124,24 @@ export async function runStitch(
     // If we can't read variables, continue without snapshot
   }
 
-  const activeEnv = ctx.activeEnv;
+  // If a specific environment is selected, temporarily switch to it
+  const envApi = (window as any).electron?.env;
+  let originalActiveEnv: string | null = null;
+  if (config.environment && envApi?.setActive) {
+    try {
+      const envData = await envApi.load?.();
+      originalActiveEnv = envData?.activeEnv || null;
+      if (config.environment !== originalActiveEnv) {
+        await envApi.setActive(config.environment);
+      } else {
+        originalActiveEnv = null; // no need to restore
+      }
+    } catch { /* best effort */ }
+  }
+
+  const activeEnv = config.environment && ctx.allEnvs?.data?.[config.environment]
+    ? ctx.allEnvs.data[config.environment]
+    : ctx.activeEnv;
 
   try {
     for (let fileIdx = 0; fileIdx < matchedFiles.length; fileIdx++) {
@@ -204,6 +226,22 @@ export async function runStitch(
               const sectionFailed = assertionResults.failed > 0 || !!response?.error;
               if (sectionFailed) hasFailedAssertion = true;
 
+              // Extract request/response details for inspection
+              const reqMeta = response?.requestMeta || response?.request || {};
+              const resHeaders = response?.headers;
+              const resBody = response?.body;
+              const bodyStr = typeof resBody === 'string'
+                ? resBody
+                : resBody != null
+                  ? JSON.stringify(resBody, null, 2)
+                  : undefined;
+              const reqBody = reqMeta.body || response?.requestBody;
+              const reqBodyStr = typeof reqBody === 'string'
+                ? reqBody
+                : reqBody != null
+                  ? JSON.stringify(reqBody, null, 2)
+                  : undefined;
+
               sectionResult = {
                 sectionIndex: sectionIdx,
                 sectionLabel: response?.__sectionLabel || null,
@@ -212,6 +250,19 @@ export async function runStitch(
                 duration: Date.now() - sectionStart,
                 error: response?.error || null,
                 assertions: assertionResults,
+                requestInfo: {
+                  method: reqMeta.method || response?.method || 'GET',
+                  url: reqMeta.url || response?.url || '',
+                  headers: Array.isArray(reqMeta.headers) ? reqMeta.headers : undefined,
+                  body: reqBodyStr ? (reqBodyStr.length > 5000 ? reqBodyStr.slice(0, 5000) + '\n... (truncated)' : reqBodyStr) : undefined,
+                  bodySize: reqBodyStr?.length,
+                },
+                responseInfo: {
+                  headers: Array.isArray(resHeaders) ? resHeaders : undefined,
+                  body: bodyStr ? (bodyStr.length > 5000 ? bodyStr.slice(0, 5000) + '\n... (truncated)' : bodyStr) : undefined,
+                  bodySize: bodyStr?.length,
+                  contentType: response?.contentType,
+                },
               };
             } catch (err) {
               hasFailedAssertion = true;
@@ -283,6 +334,13 @@ export async function runStitch(
     try {
       await variablesApi?.writeVariables?.(variableSnapshot);
     } catch { /* best effort */ }
+
+    // Restore original active environment if we switched it
+    if (originalActiveEnv && envApi?.setActive) {
+      try {
+        await envApi.setActive(originalActiveEnv);
+      } catch { /* best effort */ }
+    }
   }
 
   return { matchedCount: matchedFiles.length };
@@ -305,12 +363,14 @@ function extractAssertionResults(response: any): {
       ? assertionData.results
       : [];
   for (const r of assertionResults) {
+    // Results have nested assertion object: { assertion: { description, field, operator, expectedValue }, passed, actualValue, error }
+    const assertion = r.assertion || {};
     results.push({
-      description: r.description || r.assertion || '',
-      passed: r.passed ?? r.status === 'passed',
-      operator: r.operator,
-      actual: r.actual != null ? String(r.actual) : undefined,
-      expected: r.expected != null ? String(r.expected) : undefined,
+      description: assertion.description || r.description || '',
+      passed: r.passed ?? false,
+      operator: assertion.operator || r.operator,
+      actual: r.actualValue != null ? String(r.actualValue) : r.actual != null ? String(r.actual) : undefined,
+      expected: assertion.expectedValue != null ? String(assertion.expectedValue) : r.expected != null ? String(r.expected) : undefined,
       error: r.error,
     });
   }
