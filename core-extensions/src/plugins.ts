@@ -1,7 +1,7 @@
 /**
  * Auto-generated plugin map
  * DO NOT EDIT MANUALLY - run 'yarn generate-registry' to update
- * Generated on: 2026-03-04T19:37:08.178Z
+ * Generated on: 2026-03-23T00:49:29.617Z
  */
 
 import voiden_rest_apiPlugin from './voiden-rest-api';
@@ -11,6 +11,7 @@ import voiden_advanced_authPlugin from './voiden-advanced-auth';
 import voiden_socketsPlugin from './voiden-sockets';
 import voiden_scriptingPlugin from './voiden-scripting';
 import voiden_fakerPlugin from './voiden-faker';
+import voiden_stitchPlugin from './voiden-stitch';
 import md_previewPlugin from './md-preview';
 import openapi_importPlugin from './openapi-import';
 import postman_importPlugin from './postman-import';
@@ -24,6 +25,7 @@ export const coreExtensionPlugins: Record<string, any> = {
   'voiden-sockets-grpcs': voiden_socketsPlugin,
   'voiden-scripting': voiden_scriptingPlugin,
   'voiden-faker': voiden_fakerPlugin,
+  'voiden-stitch': voiden_stitchPlugin,
   'md-preview': md_previewPlugin,
   'openapi-import': openapi_importPlugin,
   'postman-import': postman_importPlugin

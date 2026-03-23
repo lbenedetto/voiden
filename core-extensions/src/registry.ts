@@ -1,7 +1,7 @@
 /**
  * Auto-generated extension registry
  * DO NOT EDIT MANUALLY - run 'yarn generate-registry' to update
- * Generated on: 2026-03-04T19:37:08.177Z
+ * Generated on: 2026-03-23T00:49:29.616Z
  */
 
 export interface ExtensionMetadata {
@@ -28,7 +28,7 @@ export const coreExtensions: ExtensionMetadata[] = [
     "id": "voiden-rest-api",
     "name": "Voiden REST API",
     "description": "HTTP/REST API testing toolkit with extensible request pipeline, custom blocks for headers/body, environment variables, response visualization, and support for all HTTP methods including multipart file uploads",
-    "version": "1.0.1",
+    "version": "1.4.0",
     "author": "Voiden Team",
     "enabled": true,
     "priority": 10,
@@ -45,6 +45,7 @@ export const coreExtensions: ExtensionMetadata[] = [
           "url-table",
           "multipart-table",
           "cookies-table",
+          "options-table",
           "json_body",
           "xml_body",
           "yml_body",
@@ -80,6 +81,10 @@ export const coreExtensions: ExtensionMetadata[] = [
         "responseHandler": true,
         "description": "Registers handlers for building requests and processing responses"
       },
+      "history": {
+        "registersCurlBuilder": true,
+        "description": "Registers a REST-aware cURL builder for history entries. Other plugins can do the same via context.history.registerCurlBuilder()."
+      },
       "slashCommands": {
         "groups": [
           {
@@ -102,29 +107,28 @@ export const coreExtensions: ExtensionMetadata[] = [
       "HTTP method selection (GET, POST, PUT, DELETE, PATCH, etc.)",
       "URL building with path parameters and query strings",
       "Headers management with autocomplete",
-      "Multiple body types: JSON, XML, form-data, URL-encoded, multipart",
+      "Multiple body types: JSON, XML, YAML, HTML, form-data, URL-encoded, multipart",
       "File uploads via multipart/form-data",
       "Environment variable substitution",
       "cURL import via paste",
       "Response visualization with status, headers, and body",
       "Collapsible response sections",
       "Syntax highlighting for JSON and XML responses",
-      "Request/response pipeline integration"
+      "Request/response pipeline integration",
+      "History API integration: custom cURL builder for global history export"
     ],
     "type": "core"
   },
   {
     "id": "voiden-graphql",
     "name": "Voiden GraphQL",
-    "description": "GraphQL client with schema importer for building queries through a dedicated UI or editing manually. Supports queries, mutations, subscriptions with variables. Leverages voiden-rest-api for request execution",
+    "description": "GraphQL client with schema importer for building queries through a dedicated UI or editing manually. Supports queries, mutations, subscriptions with variables. Builds its own requests with auto-generated headers and POST method",
     "version": "1.0.0",
     "author": "Voiden Team",
     "enabled": true,
     "priority": 15,
-    "dependencies": {
-      "voiden-rest-api": "^1.0.0"
-    },
-    "readme": "GraphQL extension with schema file importer and visual query builder UI. Select operations and fields from your schema or write queries manually. Supports queries, mutations, and subscriptions with variables. Depends on voiden-rest-api for request execution.",
+    "dependencies": {},
+    "readme": "GraphQL extension with schema file importer and visual query builder UI. Select operations and fields from your schema or write queries manually. Supports queries, mutations, and subscriptions with variables. Independently builds and processes requests.",
     "capabilities": {
       "blocks": {
         "owns": [
@@ -159,7 +163,7 @@ export const coreExtensions: ExtensionMetadata[] = [
       "Separate query and variables blocks",
       "Operation type support (query/mutation/subscription)",
       "Variable editor with JSON validation",
-      "Depends on voiden-rest-api for URL handling and request execution",
+      "Standalone request building with auto-generated Content-Type and POST method",
       "Schema viewer with tabs for Query/Mutation/Subscription operations",
       "Auto-generation of queries from UI selections"
     ],
@@ -256,7 +260,7 @@ export const coreExtensions: ExtensionMetadata[] = [
     "id": "voiden-sockets-grpcs",
     "name": "Sockets & gRPC APIs",
     "description": "Voiden Sockets provide comprehensive support for WebSocket (WSS) and gRPC communication with unary, server streaming, client streaming, and bidirectional streaming patterns",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "author": "Voiden Team",
     "enabled": true,
     "priority": 20,
@@ -333,6 +337,10 @@ export const coreExtensions: ExtensionMetadata[] = [
           "description": "Dedicated response panel for monitoring WebSocket and gRPC communication between Voiden and server"
         }
       },
+      "history": {
+        "registersCurlBuilder": true,
+        "description": "Registers socket-aware command builders for history entries: websocat for WS/WSS, grpcurl for GRPC/GRPCS."
+      },
       "fileHandlers": {
         "protoFiles": {
           "extensions": [
@@ -357,7 +365,8 @@ export const coreExtensions: ExtensionMetadata[] = [
       "Connection state management",
       "Message history and logging",
       "Dedicated response panel for socket communication",
-      "Support for multiple concurrent connections"
+      "Support for multiple concurrent connections",
+      "History API integration: websocat/grpcurl command builder for global history export"
     ],
     "type": "core"
   },
@@ -365,12 +374,11 @@ export const coreExtensions: ExtensionMetadata[] = [
     "id": "voiden-scripting",
     "name": "Voiden Scripting",
     "version": "1.1.0",
-    "description": "Pre-request and post-response scripting in JavaScript, Python, and Shell (bash) with a unified voiden.* API",
+    "description": "Pre-request and post-response JavaScript scripting for API requests with vd API access",
     "author": "Voiden Team",
     "enabled": true,
-    "mainProcess": true,
     "priority": 25,
-    "readme": "Add pre-request and post-response scripts to your API requests in JavaScript, Python, or Shell (bash). All languages share the same voiden.* API: read/write request data, access environment and runtime variables, log output, run assertions, and cancel requests. Script runners (Node.js, Python, bash) are exposed as plugin IPC channels (ext:voiden-scripting:script:executeNode/executePython/executeShell) so other plugins can reuse them. Insert scripts with /pre-script and /post-script slash commands.",
+    "readme": "Add JavaScript pre-request and post-response scripts to your API requests. Use the vd API to read/write request data, work with environment/runtime variables, and control request flow. Insert with /pre-script and /post-script slash commands. Note: for request body, pass a string payload; if you pass an object/JSON value it should be stringified.",
     "capabilities": {
       "blocks": {
         "owns": [
@@ -413,19 +421,17 @@ export const coreExtensions: ExtensionMetadata[] = [
       "sdk": "^1.0.0"
     },
     "features": [
-      "Pre-request and post-response scripts in JavaScript, Python, or Shell (bash)",
-      "Unified voiden.* API across all three languages (voiden.request, voiden.response, voiden.env, voiden.variables)",
-      "voiden.request.url/method/headers/body/queryParams/pathParams — read/write",
-      "voiden.response.status/statusText/headers/body/time/size — read (post-script only)",
-      "voiden.env.get(key) — synchronous environment variable access",
-      "voiden.variables.get/set — synchronous runtime variable access, persisted to .voiden/.process.env.json",
-      "voiden.log() for script output logging with level support (log/info/debug/warn/error)",
-      "voiden.assert(actual, operator, expected, message?) for script-based assertions",
+      "Pre-request JavaScript scripts (runs before request is sent)",
+      "Post-response JavaScript scripts (runs after response is received)",
+      "voiden.request API for reading/writing request data",
+      "voiden.response API for reading response data",
+      "voiden.env.get for active environment variable access",
+      "voiden.variables.get/set for Voiden runtime variable access",
+      "Request body should be string payload (stringify JSON/object values before sending)",
+      "voiden.log() for script output logging",
+      "voiden.assert(condition, message) for script-based assertions",
       "voiden.cancel() to cancel request from pre-script",
-      "Shell scripts use the same voiden.* dot-notation (bash supports dot function names)",
-      "Plugin IPC channels exposed for other plugins: ext:voiden-scripting:script:executeNode, executePython, executeShell",
-      "Inline ghost-text autocomplete for voiden.* API in all three languages",
-      "CodeMirror editor with syntax highlighting, linting, and prettify for JS/Python"
+      "CodeMirror JavaScript editor with syntax highlighting"
     ],
     "type": "core"
   },
@@ -449,6 +455,60 @@ export const coreExtensions: ExtensionMetadata[] = [
         "suggestions": true
       }
     },
+    "type": "core"
+  },
+  {
+    "id": "voiden-stitch",
+    "name": "Voiden Stitch",
+    "version": "1.0.0",
+    "description": "Batch-run multiple .void files as a stitch with aggregated assertion results, variable isolation, and sequential execution",
+    "author": "Voiden Team",
+    "enabled": true,
+    "priority": 35,
+    "readme": "Define a stitch to batch-run multiple .void files using the /stitch slash command. Configure file patterns, exclusions, and run options. Results are shown in a dedicated sidebar tab with per-file pass/fail, assertion counts, and timing.",
+    "capabilities": {
+      "blocks": {
+        "owns": [
+          "stitch"
+        ],
+        "allowExtensions": false
+      },
+      "slashCommands": {
+        "groups": [
+          {
+            "name": "Stitch",
+            "commands": [
+              "Insert Stitch Runner"
+            ]
+          }
+        ]
+      },
+      "sidebar": {
+        "tabs": [
+          {
+            "id": "stitch-results",
+            "title": "Stitch Results",
+            "side": "right",
+            "icon": "ListChecks"
+          }
+        ]
+      }
+    },
+    "dependencies": {
+      "core": "^1.0.0",
+      "sdk": "^1.0.0",
+      "voiden-rest-api": "^1.0.0"
+    },
+    "features": [
+      "Batch run multiple .void files sequentially",
+      "Glob pattern matching for file inclusion/exclusion",
+      "Shared or isolated variable scope per file",
+      "Aggregated assertion results in dedicated sidebar tab",
+      "Per-file pass/fail with assertion counts and timing",
+      "Stop-on-failure option",
+      "Configurable delay between files",
+      "Abort/cancel support"
+    ],
     "type": "core"
   },
   {

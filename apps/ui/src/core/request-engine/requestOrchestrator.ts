@@ -180,7 +180,8 @@ class RequestOrchestratorImpl implements RequestOrchestrator {
     }
 
     // Step 2: Send request through core pipeline
-    const response = await sendRequestHybrid(request, editor, signal, window.electron);
+    // Pass handlerEditor (section-scoped) so pipeline hooks get scoped getJSON()
+    const response = await sendRequestHybrid(request, handlerEditor, signal, window.electron);
 
     if (!response) {
       throw new Error("No response received from request pipeline");
