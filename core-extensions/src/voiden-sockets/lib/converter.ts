@@ -258,8 +258,12 @@ const parseGrpcurlCommand = (command: string): {
     usesReflection = true;
   }
 
+  // Check for grpc[s]:// URL scheme in the command (Voiden native format)
+  const grpcUrlMatch = command.match(/grpcs?:\/\/\S+/);
+  const schemeFromUrl = grpcUrlMatch ? (grpcUrlMatch[0].startsWith('grpcs://') ? 'grpcs' : 'grpc') : null;
+
   // Determine if it's secure connection (default is secure unless -plaintext or -insecure)
-  const isInsecure = command.includes("-plaintext") || command.includes("-insecure");
+  const isInsecure = schemeFromUrl ? schemeFromUrl === 'grpc' : (command.includes("-plaintext") || command.includes("-insecure"));
   const protocol = isInsecure ? "grpc" : "grpcs";
   const methodText = isInsecure ? "GRPC" : "GRPCS";
 
@@ -290,12 +294,14 @@ const parseGrpcurlCommand = (command: string): {
     }
   }
 
-  // Extract host:port (can be in various positions)
-  // Try to match host:port pattern
-  const hostPortMatch = command.match(/([a-zA-Z0-9.-]+:\d+)/);
-  if (hostPortMatch) {
-    const hostPort = hostPortMatch[1];
-    url = `${protocol}://${hostPort}`;
+  // Extract URL — prefer grpc[s]:// scheme format, fall back to host:port
+  if (grpcUrlMatch) {
+    url = grpcUrlMatch[0];
+  } else {
+    const hostPortMatch = command.match(/([a-zA-Z0-9.-]+:\d+)/);
+    if (hostPortMatch) {
+      url = `${protocol}://${hostPortMatch[1]}`;
+    }
   }
 
   const rpcMatch = command.match(/([A-Za-z0-9_.]+)\/([A-Za-z0-9_]+)\s*$/);
@@ -427,12 +433,7 @@ export const convertGrpcurlToSocketRequest = (grpcurlCommand: string): JSONConte
         },
         {
           type: "surl",
-          content: [
-            {
-              type: "text",
-              text: parsed.url,
-            },
-          ],
+          content: parsed.url ? [{ type: "text", text: parsed.url }] : [],
         },
         {
           type: "proto",
