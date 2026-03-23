@@ -72,6 +72,34 @@ const useParentResponseDoc = (editor: any, getPos: () => number) => {
 
 
 
+/** Truncated cell that shows a tooltip on hover for long values */
+const TruncatedCell = ({ value, className }: { value: string; className?: string }) => {
+  const maxLen = 80;
+  const isLong = value.length > maxLen;
+  const [showFull, setShowFull] = React.useState(false);
+
+  if (!isLong) {
+    return <span className={`font-mono ${className || ''}`}>{value}</span>;
+  }
+
+  return (
+    <span className="relative group">
+      <span
+        className={`font-mono truncate block max-w-[200px] cursor-help ${className || ''}`}
+        title={value}
+        onClick={() => setShowFull(!showFull)}
+      >
+        {value.slice(0, maxLen)}...
+      </span>
+      {showFull && (
+        <div className="absolute z-50 left-0 top-full mt-1 p-2 bg-panel border border-border rounded shadow-lg max-w-[400px] max-h-[200px] overflow-auto text-[10px] font-mono whitespace-pre-wrap break-all text-text">
+          {value}
+        </div>
+      )}
+    </span>
+  );
+};
+
 // Factory function pattern
 export const createAssertionResultsNode = (NodeViewWrapper: any, useParentResponseDoc: (editor: any, getPos: () => number) => { openNodes: string[]; parentPos: number | null }) => {
   const AssertionResultsComponent = ({ node, getPos, editor }: any) => {
@@ -235,27 +263,26 @@ export const createAssertionResultsNode = (NodeViewWrapper: any, useParentRespon
                           </span>
                         </td>
                         <td className="px-2 py-2">
-                          <span className="font-mono text-green-400 break-all">
-                            {result.assertion.expectedValue}
-                          </span>
+                          <TruncatedCell
+                            value={result.assertion.expectedValue}
+                            className="text-green-400"
+                          />
                         </td>
                         <td className="px-2 py-2">
-                          <span
-                            className={`font-mono break-all ${result.passed ? "text-green-400" : "text-red-400"
-                              }`}
-                          >
-                            {result.actualValue !== null && result.actualValue !== undefined
-                              ? typeof result.actualValue === "object"
-                                ? JSON.stringify(result.actualValue)
-                                : String(result.actualValue)
-                              : "undefined"}
-                          </span>
+                          <TruncatedCell
+                            value={
+                              result.actualValue !== null && result.actualValue !== undefined
+                                ? typeof result.actualValue === "object"
+                                  ? JSON.stringify(result.actualValue)
+                                  : String(result.actualValue)
+                                : "undefined"
+                            }
+                            className={result.passed ? "text-green-400" : "text-red-400"}
+                          />
                         </td>
                         <td className="px-2 py-2">
                           {result.error && (
-                            <span className="font-mono text-red-400 break-all">
-                              {result.error}
-                            </span>
+                            <TruncatedCell value={result.error} className="text-red-400" />
                           )}
                         </td>
                       </tr>

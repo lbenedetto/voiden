@@ -77,6 +77,12 @@ export const TableCellAutocomplete = Extension.create({
 
           if (!query) return items;
 
+          // If the query exactly matches a suggestion, don't show the popup
+          // (prevents popup from staying open after selecting a suggestion)
+          if (items.some((item) => item.label.toLowerCase() === query.toLowerCase())) {
+            return [];
+          }
+
           return items.filter((item) =>
             item.label.toLowerCase().includes(query.toLowerCase()),
           );
