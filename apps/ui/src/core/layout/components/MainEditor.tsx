@@ -242,44 +242,45 @@ export const MainEditor = ({ bottomPanelProps, rightPanelProps }: MainEditorProp
 
   return (
     <Panel defaultSize={80} minSize={5} className="min-w-96">
-      <PanelGroup direction="vertical" autoSaveId="persist-3">
-        <Panel defaultSize={70} minSize={20}>
-          <PanelGroup direction="horizontal" autoSaveId="per">
-            <Panel defaultSize={60} minSize={30}>
+      <PanelGroup direction="horizontal" autoSaveId="persist-3-h">
+        {/* Left: Editor + Terminal stacked vertically */}
+        <Panel defaultSize={60} minSize={20}>
+          <PanelGroup direction="vertical" autoSaveId="persist-3-v">
+            <Panel defaultSize={70} minSize={20}>
               <div className="h-full flex flex-col">
                 {editorToolbar}
                 {editorContent}
               </div>
             </Panel>
 
-            <ResizeHandle orientation="vertical" />
+            <ResizeHandle orientation="horizontal" />
 
-            {/* Right Panel - Response Preview */}
-            <Panel {...rightPanelProps}>
-              <div className="h-full border-l border-border bg-panel">
-                <SidePanelTabs side="right" />
-                <div className="h-[calc(100%-2rem)]">
-                  <SidePanelContent side="right" />
+            {/* Terminal Panel */}
+            <Panel {...bottomPanelProps}>
+              <div className="h-full border-t border-border">
+                <div className="h-8 flex justify-between bg-panel">
+                  <PanelTabs panel="bottom" />
+                  <div className="flex border-l border-b border-border">
+                    <button className="px-2 hover:bg-active text-comment" onClick={() => newTerminalTab("bottom")}>
+                      <Plus size={14} />
+                    </button>
+                  </div>
                 </div>
+                <PanelContent panelId="bottom" />
               </div>
             </Panel>
           </PanelGroup>
         </Panel>
 
-        <ResizeHandle orientation="horizontal" />
+        <ResizeHandle orientation="vertical" />
 
-        {/* Terminal Panel */}
-        <Panel {...bottomPanelProps}>
-          <div className="h-full border-t border-border">
-            <div className="h-8 flex justify-between bg-panel">
-              <PanelTabs panel="bottom" />
-              <div className="flex border-l border-b border-border">
-                <button className="px-2 hover:bg-active text-comment" onClick={() => newTerminalTab("bottom")}>
-                  <Plus size={14} />
-                </button>
-              </div>
+        {/* Right Panel - Response Preview — full height */}
+        <Panel {...rightPanelProps}>
+          <div className="h-full border-l border-border bg-panel">
+            <SidePanelTabs side="right" />
+            <div className="h-[calc(100%-2rem)]">
+              <SidePanelContent side="right" />
             </div>
-            <PanelContent panelId="bottom" />
           </div>
         </Panel>
       </PanelGroup>

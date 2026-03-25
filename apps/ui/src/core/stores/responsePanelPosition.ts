@@ -51,6 +51,12 @@ export function useResponsePanelPosition() {
       }
       setBottomOpenedByTerminal(false);
     }
+
+    // Switching right → bottom: open the bottom panel
+    if (next === "bottom" && prev === "right") {
+      const { openBottomPanel } = usePanelStore.getState();
+      openBottomPanel();
+    }
   };
 
   const togglePosition = () =>
