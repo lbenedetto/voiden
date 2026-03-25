@@ -243,10 +243,15 @@ export const useResponseStore = create<ResponseStore>()(
 
       setCurrentRequestTabId: (tabId) => set({ currentRequestTabId: tabId }),
 
-      setLoading: (loading, tabId) => set({
+      setLoading: (loading, tabId) => set((state) => ({
         isLoading: loading,
         currentRequestTabId: loading ? (tabId ?? null) : null,
-      }),
+        // Clear stale section responses for this tab when a new run starts,
+        // so re-running a subset of requests doesn't show leftover old sections.
+        responses: loading && tabId
+          ? { ...state.responses, [tabId]: {} }
+          : state.responses,
+      })),
 
       setError: (tabId, error) => {
         if (!tabId) {
