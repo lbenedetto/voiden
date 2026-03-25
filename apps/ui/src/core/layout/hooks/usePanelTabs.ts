@@ -26,6 +26,11 @@ export const useGetTabContent = (panelId: string) => {
     staleTime: Infinity,
     refetchOnMount: false,
     refetchOnWindowFocus: false,
+    // While a new tab's content is being fetched, keep the previous tab's data
+    // so PanelContent never returns null mid-transition. This prevents terminal
+    // components from unmounting and replaying their buffer on remount.
+    // When tab is undefined (last tab closed), no placeholder — allow unmount.
+    placeholderData: tab ? (prev: any) => prev : undefined,
     queryFn: async () => {
       const content = await window.electron?.tab.getContent(tab);
 
@@ -70,6 +75,18 @@ export const useClosePanelTab = () => {
         useEditorStore.getState().clearUnsaved(result.tabId);
         useEditorStore.getState().clearScrollPosition(result.tabId);
       }
+      // Immediately remove the closed tab from cache so that any subsequent
+      // check (e.g. terminal button handler checking tabs.length) sees the
+      // correct count right away, without waiting for the async refetch.
+      queryClient.setQueryData(["panel:tabs", result.panelId], (old: any) => {
+        if (!old) return old;
+        const newTabs = old.tabs.filter((t: any) => t.id !== result.tabId);
+        const newActiveTabId =
+          old.activeTabId === result.tabId
+            ? (newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null)
+            : old.activeTabId;
+        return { ...old, tabs: newTabs, activeTabId: newActiveTabId };
+      });
       queryClient.invalidateQueries({ queryKey: ["panel:tabs", result.panelId] });
     },
   });

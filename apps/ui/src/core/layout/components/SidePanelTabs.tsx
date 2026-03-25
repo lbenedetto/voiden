@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { Files, ArrowDownUp, Blocks, Search, GitBranch, History, icons, Loader2 } from "lucide-react";
+import { Files, ArrowDownUp, Blocks, Search, GitBranch, History, icons, Loader2, PanelRight, PanelBottom } from "lucide-react";
 import { cn } from "@/core/lib/utils";
 import { useGetSidebarTabs, useActivateSidebarTab } from "@/core/layout/hooks";
 import { usePluginStore } from "@/plugins";
@@ -7,6 +7,7 @@ import { useSearchStore } from "@/core/stores/searchStore";
 import { Kbd } from "@/core/components/ui/kbd";
 import { Tip } from "@/core/components/ui/Tip";
 import { useResponseStore } from "@/core/request-engine/stores/responseStore";
+import { useResponsePanelPosition } from "@/core/stores/responsePanelPosition";
 
 const sidebarTabIconMap = {
   fileExplorer: <Files size={14} />,
@@ -43,11 +44,12 @@ const renderLucideIcon = (iconName: string | undefined, size: number = 14) => {
   return <IconComponent size={size} />;
 };
 
-export const SidePanelTabs = ({ side, wrapperClassName, onTabClick }: { side: "left" | "right"; wrapperClassName?: string; onTabClick?: () => void }) => {
+export const SidePanelTabs = ({ side, wrapperClassName, onTabClick, forceInactive }: { side: "left" | "right"; wrapperClassName?: string; onTabClick?: () => void; forceInactive?: boolean }) => {
   const { data: sidebarTabs } = useGetSidebarTabs(side);
   const pluginTabs = usePluginStore((state) => state.sidebar[side]);
   const activateTab = useActivateSidebarTab();
   const isRequestLoading = useResponseStore((s) => s.isLoading);
+  const { position: responsePanelPosition, togglePosition } = useResponsePanelPosition();
 
   const storeIsSearching = useSearchStore((state) => state.isSearching);
   const setStoreIsSearching = useSearchStore((state) => state.setIsSearching);
@@ -107,7 +109,7 @@ export const SidePanelTabs = ({ side, wrapperClassName, onTabClick }: { side: "l
                 }}
                 className={cn(
                   "px-2 h-full flex items-center justify-center hover:bg-active",
-                  sidebarTabs.activeTabId === tab.id && !storeIsSearching && "bg-active",
+                  !forceInactive && sidebarTabs.activeTabId === tab.id && !storeIsSearching && "bg-active",
                 )}
               >
                 <span className="relative flex items-center justify-center">
@@ -139,6 +141,21 @@ export const SidePanelTabs = ({ side, wrapperClassName, onTabClick }: { side: "l
           </React.Fragment>
         );
       })}
+
+      {/* Layout toggle — only shown in the right panel tab bar */}
+      {side === "right" && !wrapperClassName && (
+        <>
+          <div className="flex-1" />
+          <Tip label={responsePanelPosition === "right" ? "Move to bottom" : "Move to right"} side="bottom">
+            <button
+              className="px-2 h-full flex items-center justify-center hover:bg-active text-comment border-l border-border"
+              onClick={togglePosition}
+            >
+              {responsePanelPosition === "right" ? <PanelBottom size={14} /> : <PanelRight size={14} />}
+            </button>
+          </Tip>
+        </>
+      )}
     </div>
   );
 };

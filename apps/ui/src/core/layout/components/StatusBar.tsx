@@ -1,9 +1,13 @@
-import { PanelLeft, Terminal, Github, MessageCircle, PanelRight, PanelBottom, GitCompareArrows, Download, icons } from "lucide-react";
+import { PanelLeft, Terminal, Github, MessageCircle, PanelRight, GitCompareArrows, Download, icons } from "lucide-react";
 import { cn } from "@/core/lib/utils";
 import { GitBranchesList } from "@/core/git/components/GitBranchesList";
 import { BranchComparisonDialog } from "@/core/git/components/BranchComparisonDialog";
 import { useSettings } from "@/core/settings/hooks/useSettings";
 import { usePanelStore } from "@/core/stores/panelStore";
+import { useResponsePanelPosition } from "@/core/stores/responsePanelPosition";
+import { useNewTerminalTab } from "@/core/terminal/hooks";
+import { useGetPanelTabs, useActivateTab } from "@/core/layout/hooks";
+import { useQueryClient } from "@tanstack/react-query";
 import { useState, useEffect } from "react";
 import { Kbd } from "@/core/components/ui/kbd";
 import { Tip } from "@/core/components/ui/Tip";
@@ -45,8 +49,14 @@ export const StatusBar = ({
   toggleRight,
 }: StatusBarProps) => {
   const { settings } = useSettings();
-  const responsePanelPosition = usePanelStore((state) => state.responsePanelPosition);
-  const toggleResponsePanelPosition = usePanelStore((state) => state.toggleResponsePanelPosition);
+  const { position: responsePanelPosition } = useResponsePanelPosition();
+  const { openBottomPanel, bottomPanelRef, setBottomActiveView } = usePanelStore();
+  const bottomActiveView = usePanelStore((state) => state.bottomActiveView);
+  const setBottomOpenedByTerminal = usePanelStore((state) => state.setBottomOpenedByTerminal);
+  const { mutate: newTerminalTab } = useNewTerminalTab();
+  const { mutate: activateTab } = useActivateTab();
+  const { data: bottomPanelData } = useGetPanelTabs("bottom");
+  const queryClient = useQueryClient();
   const statusBarItems = usePluginStore((state) => state.statusBarItems);
   const leftItems = statusBarItems.filter((item) => item.position === 'left');
   const rightItems = statusBarItems.filter((item) => item.position === 'right');
@@ -307,25 +317,71 @@ export const StatusBar = ({
 
           {/* Bottom Panel Toggle */}
           <Tip label={<span className="flex items-center gap-2"><span>Toggle terminal</span><Kbd keys={'⌘J'} size="sm" /></span>} align="end">
-            <button className={cn("h-full px-2 hover:bg-active text-comment", !isBottomCollapsed && "bg-active")} onClick={toggleBottom}>
+            <button
+              className={cn(
+                "h-full px-2 hover:bg-active text-comment",
+                responsePanelPosition === "right"
+                  ? !isBottomCollapsed && "bg-active"
+                  : !isBottomCollapsed && bottomActiveView === "terminal" && "bg-active",
+              )}
+              onClick={() => {
+                if (responsePanelPosition === "right") {
+                  // Right mode: bottom panel is purely terminal — simple toggle with flag
+                  setBottomOpenedByTerminal(isBottomCollapsed);
+                  toggleBottom();
+                  return;
+                }
+
+                // Bottom mode — close panel if terminal is currently active and visible
+                if (!isBottomCollapsed && bottomActiveView === "terminal") {
+                  setBottomOpenedByTerminal(false);
+                  toggleBottom();
+                  return;
+                }
+
+                // Open panel and switch to terminal view (panel may be closed or showing sidebar)
+                setBottomOpenedByTerminal(true);
+                setBottomActiveView("terminal");
+                if (isBottomCollapsed) {
+                  openBottomPanel();
+                  bottomPanelRef?.current?.expand();
+                }
+
+                // Create or activate terminal tab — single source of truth, no race with handleToggleBottomPanel
+                const tabs = bottomPanelData?.tabs ?? [];
+                if (tabs.length === 0) {
+                  newTerminalTab("bottom");
+                } else {
+                  const targetTabId = bottomPanelData?.activeTabId ?? tabs[0].id;
+                  queryClient.setQueryData(["panel:tabs", "bottom"], (old: any) =>
+                    old ? { ...old, activeTabId: targetTabId } : old
+                  );
+                  if (!bottomPanelData?.activeTabId) {
+                    activateTab({ panelId: "bottom", tabId: targetTabId });
+                  }
+                }
+              }}
+            >
               <Terminal size={14} />
             </button>
           </Tip>
 
-          {/* Response Panel — position switch (shows icon of the layout it will switch TO) */}
-          <Tip label={responsePanelPosition === "right"
-            ? "Move response panel to bottom"
-            : "Move response panel to right"
-          } align="end">
+          {/* Response Panel — open/close in current position */}
+          <Tip label={<span className="flex items-center gap-2"><span>Toggle response panel</span><Kbd keys={'⌘Y'} size="sm" /></span>} align="end">
             <button
-              className={cn("h-full px-2 hover:bg-active text-comment", !isRightCollapsed && "bg-active")}
+              className={cn(
+                "h-full px-2 hover:bg-active text-comment",
+                responsePanelPosition === "right" ? !isRightCollapsed && "bg-active" : !isBottomCollapsed && "bg-active",
+              )}
               onClick={() => {
-                toggleResponsePanelPosition();
-                // Also open the response panel if it was closed
-                if (isRightCollapsed) toggleRight();
+                if (responsePanelPosition === "right") {
+                  toggleRight();
+                } else {
+                  toggleBottom();
+                }
               }}
             >
-              {responsePanelPosition === "right" ? <PanelBottom size={14} /> : <PanelRight size={14} />}
+              <PanelRight size={14} />
             </button>
           </Tip>
         </div>

@@ -20,6 +20,7 @@ import { voidenExtensions } from "@/core/editors/voiden/extensions";
 import { Input } from "@/core/components/ui/input";
 import { escapeRegExp } from "@/core/editors/voiden/search/unifiedSearch";
 import { getSectionBorderColor } from "@/core/editors/voiden/extensions/sectionIndicator";
+import { Tip } from "@/core/components/ui/Tip";
 
 /** Format relative time: "just now", "2m ago", "1h ago", etc. */
 function formatRelativeTime(ts: number): string {

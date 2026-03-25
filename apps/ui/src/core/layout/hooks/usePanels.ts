@@ -2,6 +2,7 @@ import { ImperativePanelHandle } from "react-resizable-panels";
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
 import { cn } from "@/core/lib/utils";
 import { usePanelStore } from "@/core/stores/panelStore";
+import { getResponsePanelPosition } from "@/core/stores/responsePanelPosition";
 import { useGetPanelTabs } from "./usePanelTabs";
 import { useNewTerminalTab } from "@/core/terminal/hooks";
 import { useGetAppState } from "@/core/state/hooks";
@@ -122,7 +123,10 @@ export const useBottomPanel = ({ defaultSize = 0, minSize = 20, panelId = "botto
         openBottomPanel();
         saveBottomPanelState(appState?.activeDirectory, true);
 
-        if (tabs?.tabs) {
+        // Only auto-create terminal in right mode.
+        // In bottom mode the panel is shared with the response panel,
+        // so terminal creation is handled explicitly by handleSwitchToTerminal.
+        if (getResponsePanelPosition() === "right" && tabs?.tabs) {
           const tabCount = tabs.tabs.length;
           if (tabCount === 0) {
             createTerminalTab(panelId);
@@ -274,7 +278,8 @@ export const useRightPanel = ({ defaultSize = 0, minSize = 30 }: UseRightPanelPr
 
       if ((e.metaKey || e.ctrlKey) && e.key === "y") {
         e.preventDefault();
-        const { responsePanelPosition, setBottomActiveView, openBottomPanel, bottomPanelRef, bottomActiveView } = usePanelStore.getState();
+        const { setBottomActiveView, openBottomPanel, bottomPanelRef, bottomActiveView } = usePanelStore.getState();
+        const responsePanelPosition = getResponsePanelPosition();
         if (responsePanelPosition === "bottom") {
           if (bottomActiveView === "sidebar" && bottomPanelRef?.current && !bottomPanelRef.current.isCollapsed()) {
             // Already showing sidebar in open panel — collapse

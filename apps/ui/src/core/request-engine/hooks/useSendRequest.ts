@@ -10,6 +10,7 @@ import { Editor } from "@tiptap/core";
 import { useGetActiveDocument } from "@/core/documents/hooks";
 import { useActiveEnvironment } from "@/core/environment/hooks";
 import { usePanelStore } from "@/core/stores/panelStore";
+import { getResponsePanelPosition } from "@/core/stores/responsePanelPosition";
 import { useResponseStore } from "../stores/responseStore";
 import { mapErrorToMessage } from "../utils/errorMessages";
 import { requestOrchestrator } from "../requestOrchestrator";
@@ -30,14 +31,15 @@ export const  useSendRestRequest = (_editor: Editor) => {
 
   /** Open the response panel and activate the response tab. */
   const showResponsePanel = async () => {
-    const { responsePanelPosition, setBottomActiveView, openBottomPanel, bottomPanelRef } = usePanelStore.getState();
+    const { setBottomActiveView, openBottomPanel, bottomPanelRef } = usePanelStore.getState();
+    const responsePanelPosition = getResponsePanelPosition();
 
     if (responsePanelPosition === "bottom") {
-      // Bottom mode: open bottom panel, switch to sidebar view, activate response tab
+      // Bottom mode: always open bottom panel and switch to sidebar view
       setBottomActiveView("sidebar");
-      if (bottomPanelRef?.current?.isCollapsed()) {
+      openBottomPanel();
+      if (bottomPanelRef?.current) {
         bottomPanelRef.current.expand();
-        openBottomPanel();
       }
     } else {
       // Right mode: open the right panel
