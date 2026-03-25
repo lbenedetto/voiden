@@ -14,6 +14,9 @@ declare global {
                 getDirectoryExist: (parentPath: string, dirName: string) => Promise<boolean>;
                 getFileExist: (parentPath: string, fileName: string) => Promise<boolean>;
             };
+            utils?: {
+                pathJoin: (...paths: string[]) => Promise<string>;
+            };
             state?: {
                 get: () => Promise<{ activeProject?: string }>;
                 getProjects?: () => Promise<any>;
@@ -65,9 +68,18 @@ export const createOpenApiSpecLink = (context: ExtendedPluginContextExplicit) =>
 
                 // Resolve full path
                 let fullPath = filePath;
-                if (!isExternal && activeProject && !filePath.startsWith(activeProject)) {
-                    const separator = filePath.startsWith('/') ? '' : '/';
-                    fullPath = `${activeProject}${separator}${filePath}`;
+                if (!isExternal && activeProject && filePath) {
+                    const normalizedProject = activeProject.replace(/\\/g, "/");
+                    const normalizedFilePath = filePath.replace(/\\/g, "/");
+                    const isAbsolute = normalizedFilePath.startsWith("/") || /^[A-Za-z]:\//.test(normalizedFilePath) || normalizedFilePath.startsWith("//");
+
+                    if (!isAbsolute && !normalizedFilePath.startsWith(normalizedProject)) {
+                        const projectRoot = normalizedProject.replace(/\/+$/, "");
+                        const relativePath = normalizedFilePath.replace(/^\/+/, "");
+                        fullPath = `${projectRoot}/${relativePath}`;
+                    } else if (normalizedFilePath.startsWith(normalizedProject)) {
+                        fullPath = normalizedFilePath;
+                    }
                 }
 
                 await context.project.openFile(fullPath, true);

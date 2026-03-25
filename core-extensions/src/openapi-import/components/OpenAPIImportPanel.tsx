@@ -320,10 +320,14 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
         const project = await context.project?.getActiveProject();
 
         let relativePath = tab.source;
-        if (project && tab.source.startsWith(project)) {
-          relativePath = tab.source.slice(project.length);
-          if (relativePath.startsWith('/')) {
-            relativePath = relativePath.slice(1);
+        if (project && tab.source) {
+          const normalizedSource = tab.source.replace(/\\/g, "/");
+          const normalizedProject = project.replace(/\\/g, "/");
+          if (normalizedSource.startsWith(normalizedProject)) {
+            relativePath = normalizedSource.slice(normalizedProject.length);
+            relativePath = relativePath.replace(/^[/\\]+/, "");
+          } else {
+            relativePath = normalizedSource;
           }
         }
 
