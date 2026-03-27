@@ -55,6 +55,22 @@ export const useActivateTab = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ panelId, tabId }: { panelId: string; tabId: string }) => window.electron?.tab.activate(panelId, tabId),
+    onMutate: async ({ panelId, tabId }: { panelId: string; tabId: string }) => {
+      // Cancel any in-flight refetches so they don't overwrite the optimistic update
+      await queryClient.cancelQueries({ queryKey: ["panel:tabs", panelId] });
+      const prev = queryClient.getQueryData(["panel:tabs", panelId]);
+      // Immediately update the active tab so PanelContent switches without waiting for IPC
+      queryClient.setQueryData(["panel:tabs", panelId], (old: any) => {
+        if (!old) return old;
+        return { ...old, activeTabId: tabId };
+      });
+      return { prev, panelId };
+    },
+    onError: (_err: any, _vars: any, context: any) => {
+      if (context?.prev !== undefined) {
+        queryClient.setQueryData(["panel:tabs", context.panelId], context.prev);
+      }
+    },
     onSuccess: ({ panelId }: { panelId: string; tabId: string }) => {
       queryClient.invalidateQueries({ queryKey: ["panel:tabs", panelId] });
     }

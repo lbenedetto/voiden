@@ -48,7 +48,7 @@ function dedupeBranchNames(branches: string[], remoteNames: Set<string>): string
 // Cache for Git status and branch information
 const gitStatusCache = new Map<string, GitStatusCache>();
 const branchCache = new Map<string, BranchCache>();
-const CACHE_EXPIRATION = 5000; // 5 seconds cache expiration
+const CACHE_EXPIRATION = 30000; // 30 seconds — reduces redundant git status calls between tree reloads
 
 // In-flight deduplication for getCachedGitStatus so concurrent callers
 // (e.g. files:tree and git:getStatus firing simultaneously) share one git process.

@@ -22,11 +22,65 @@ const sortNodes = (nodes: TreeNode[]): TreeNode[] => {
   });
 };
 
+/**
+ * Bounded concurrency semaphore — limits parallel directory reads across the
+ * entire recursive tree walk so we get parallelism without heap OOM.
+ * 16 slots: fast on large projects while keeping memory usage stable.
+ */
+class IOSemaphore {
+  private slots: number;
+  private queue: Array<() => void> = [];
+  constructor(max: number) { this.slots = max; }
+  acquire(): Promise<void> {
+    if (this.slots > 0) { this.slots--; return Promise.resolve(); }
+    return new Promise(resolve => this.queue.push(resolve));
+  }
+  release() {
+    const next = this.queue.shift();
+    if (next) { next(); } else { this.slots++; }
+  }
+}
+
+// Directories whose contents are too large to eagerly walk.
+// Defined once outside the recursive function so the Set is not recreated
+// on every directory level (buildFileTree can be called thousands of times).
+const LAZY_DIRS = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  ".next",
+  ".nuxt",
+  ".cache",
+  ".turbo",
+  ".svelte-kit",
+  "out",
+  ".output",
+  ".vercel",
+  "__pycache__",
+  ".venv",
+  "venv",
+  ".tox",
+  "vendor",
+  "Pods",
+  ".gradle",
+  "target",
+]);
+
 export const buildFileTree = async (
   dir: string,
   gitStatusMap?: Map<string, any>,
+  _sem?: IOSemaphore,
 ): Promise<TreeNode> => {
-  const items = await fs.promises.readdir(dir, { withFileTypes: true });
+  const sem = _sem ?? new IOSemaphore(16);
+
+  await sem.acquire();
+  let items: fs.Dirent[];
+  try {
+    items = await fs.promises.readdir(dir, { withFileTypes: true });
+  } finally {
+    sem.release();
+  }
 
   const filtered = items.filter((item) => {
     if (!item.name.startsWith(".")) return true;
@@ -42,40 +96,42 @@ export const buildFileTree = async (
     return false;
   });
 
-  // Process children sequentially to avoid spawning thousands of concurrent
-  // recursive calls (which caused heap OOM on large projects).
-  const nodes: TreeNode[] = [];
-  for (const item of filtered) {
+  // Process all siblings in parallel, bounded by the shared semaphore.
+  // This replaces the previous sequential for...of loop — same OOM safety
+  // (semaphore caps concurrency at 16) but much faster for wide trees.
+  const nodes = await Promise.all(filtered.map(async (item) => {
     const fullPath = path.join(dir, item.name);
     if (item.isDirectory()) {
-      const subtree = await buildFileTree(fullPath, gitStatusMap);
-      const aggregatedGitStatus = aggregateGitStatus(subtree.children || []);
-      nodes.push({
+      // All subdirectories are lazy — never recurse at startup.
+      // Children load on demand via files:expandDir when the user expands a folder.
+      return {
         name: item.name,
         path: fullPath,
         type: "folder" as const,
-        children: sortNodes(subtree.children || []),
-        aggregatedGitStatus,
-      });
+        children: [],
+        lazy: true,
+      } as TreeNode;
     } else {
-      nodes.push({
+      return {
         name: item.name,
         path: fullPath,
         type: "file" as const,
         ...(gitStatusMap?.has(fullPath)
           ? { git: gitStatusMap.get(fullPath) }
           : {}),
-      });
+      } as TreeNode;
     }
-  }
+  }));
 
-  return {
+  const result: TreeNode = {
     name: path.basename(dir),
     path: dir,
     type: "folder" as const,
     children: sortNodes(nodes),
     aggregatedGitStatus: aggregateGitStatus(nodes),
   };
+
+  return result;
 };
 
 export async function createFile(

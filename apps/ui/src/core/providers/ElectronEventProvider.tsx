@@ -57,12 +57,11 @@ export const ElectronEventProvider: React.FC<{ children: React.ReactNode }> = ({
       },
       "file:new": (data: any) => {
         // Debounce: during clone this fires for every file written to disk.
-        // Batch all invalidations into one flush after events settle.
+        // Only refresh the file tree and env — new files on disk don't affect
+        // open tab content or the tab list (file:newTab handles that separately).
         if (fileNewDebounceRef.current) clearTimeout(fileNewDebounceRef.current);
         fileNewDebounceRef.current = setTimeout(() => {
           queryClient.invalidateQueries({ queryKey: ["files:tree"] });
-          queryClient.invalidateQueries({ queryKey: ["panel:tabs"], exact: false });
-          queryClient.invalidateQueries({ queryKey: ["tab:content"], exact: false });
           queryClient.invalidateQueries({ queryKey: ["env"] });
           handleEvent("file:new", data);
         }, 400);

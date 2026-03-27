@@ -86,6 +86,7 @@ const pendingLog = new Map<string, Promise<any>>();
 const pendingConflicts = new Map<string, Promise<any>>();
 const pendingFetch = new Map<string, Promise<any>>();
 const pendingTree = new Map<string, Promise<any>>();
+const pendingStash = new Map<string, Promise<any>>();
 
 export function registerGitIpcHandlers() {
   // Get git repository root directory
@@ -232,7 +233,6 @@ export function registerGitIpcHandlers() {
     // Deduplicate: if a status call is already in-flight for this project,
     // return the same promise rather than spawning more git processes.
     return dedupeCall(pendingStatus, activeProject, async () => {
-
     try {
       const git = simpleGit(activeProject);
 
@@ -886,18 +886,21 @@ export function registerGitIpcHandlers() {
   ipcMain.handle("git:stashList", async (event: IpcMainInvokeEvent) => {
     const activeProject = await getActiveProject(event);
     if (!activeProject) return [];
-    try {
-      const git = simpleGit(activeProject);
-      const isRepo = await git.checkIsRepo();
-      if (!isRepo) return [];
-      const raw = await git.raw(['stash', 'list', '--format=%gd|%s|%cr']);
-      return raw.trim().split('\n').filter(Boolean).map((line, index) => {
-        const [ref, subject, date] = line.split('|');
-        return { index, ref: ref?.trim(), message: subject?.trim(), date: date?.trim() };
-      });
-    } catch {
-      return [];
-    }
+    return dedupeCall(pendingStash, activeProject, async () => {
+      try {
+        const git = simpleGit(activeProject);
+        const isRepo = await git.checkIsRepo();
+        if (!isRepo) return [];
+        const raw = await git.raw(['stash', 'list', '--format=%gd|%s|%cr']);
+        const entries = raw.trim().split('\n').filter(Boolean).map((line, index) => {
+          const [ref, subject, date] = line.split('|');
+          return { index, ref: ref?.trim(), message: subject?.trim(), date: date?.trim() };
+        });
+        return entries;
+      } catch {
+        return [];
+      }
+    });
   });
 
   // Pop a stash by index

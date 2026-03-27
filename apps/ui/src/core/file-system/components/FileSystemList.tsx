@@ -61,8 +61,8 @@ type ExtendedFileTree = FileTree & {
   parent?: string;
   isTemporary?: boolean;
   fileKind?: "file" | "void" | undefined;
-  // If you use children, you might want to type it too:
   children?: ExtendedFileTree[];
+  lazy?: boolean;
 };
 
 interface RenameInputProps {
@@ -123,6 +123,7 @@ function RenameInput({ node, error, setError, onSubmit, setIsRenaming }: RenameI
 interface TreeNodeProps extends NodeRendererProps<ExtendedFileTree> {
   activeFile: { source: string } | null;
   removeTemporaryNode: (nodeId: string) => void;
+  onFolderToggle: (node: any) => void;
 }
 const DragOverContext = React.createContext<{
   dragOverParentId: string | null;
@@ -144,7 +145,7 @@ function FileTree() {
   );
 }
 
-function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode }: TreeNodeProps) {
+function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode, onFolderToggle }: TreeNodeProps) {
   const [error, setError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [dragOverTimer, setDragOverTimer] = useState<NodeJS.Timeout | null>(null);
@@ -666,7 +667,7 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode }: 
           // console.error("Failed to open file:", error);
         }
       } else {
-        node.toggle();
+        onFolderToggle(node);
       }
     }
   };
@@ -852,6 +853,19 @@ const removeNodeFromTreeData = (nodes: ExtendedFileTree[], nodeId: string): Exte
     .map((node) => (node.children ? { ...node, children: removeNodeFromTreeData(node.children, nodeId) } : node));
 };
 
+// Recursively injects children into the node at targetPath, clearing its lazy flag.
+function injectChildren(nodes: ExtendedFileTree[], targetPath: string, children: ExtendedFileTree[]): ExtendedFileTree[] {
+  return nodes.map((node) => {
+    if (node.path === targetPath) {
+      return { ...node, children: children as ExtendedFileTree[], lazy: false };
+    }
+    if (node.children && node.children.length > 0) {
+      return { ...node, children: injectChildren(node.children, targetPath, children) };
+    }
+    return node;
+  });
+}
+
 export const FileSystemList = () => {
   const { data, isPending, isFetching } = useFileTree();
   const { data: appState } = useGetAppState();
@@ -892,7 +906,7 @@ export const FileSystemList = () => {
         // ignore
       }
     } else {
-      node.toggle();
+      expandLazyNode(node);
     }
   };
   const dndRootElement = useRef<HTMLDivElement>(null);
@@ -901,6 +915,27 @@ export const FileSystemList = () => {
 
   // Controlled tree data state.
   const [treeData, setTreeData] = useState<ExtendedFileTree[]>([]);
+  const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
+
+  const expandLazyNode = useCallback(async (node: any) => {
+    const nodePath: string = node.data.path;
+    if (loadingDirs.has(nodePath)) return; // already loading
+    if (!node.data.lazy) { node.toggle(); return; }
+    // Already loaded before (lazy cleared after first expand)
+    if (node.data.children && node.data.children.length > 0) { node.toggle(); return; }
+
+    setLoadingDirs((prev) => new Set(prev).add(nodePath));
+    try {
+      const children = await window.electron?.files.expandDir(nodePath);
+      if (children) {
+        setTreeData((prev) => injectChildren(prev, nodePath, children as ExtendedFileTree[]));
+        // Open after React re-renders with the new children
+        setTimeout(() => treeRef.current?.get(nodePath)?.open(), 0);
+      }
+    } finally {
+      setLoadingDirs((prev) => { const s = new Set(prev); s.delete(nodePath); return s; });
+    }
+  }, [loadingDirs]);
 
   // Drag over state (must be declared before any conditional returns)
   const [dragOverParentId, setDragOverParentId] = useState<string | null>(null);
@@ -1488,7 +1523,7 @@ export const FileSystemList = () => {
                     return dragNodes.some((node) => node.data.parent === parentNode.data.path);
                   }}
                 >
-                  {(nodeProps) => <TreeNode {...nodeProps} activeFile={activeFile} removeTemporaryNode={handleRemoveTemporaryNode} />}
+                  {(nodeProps) => <TreeNode {...nodeProps} activeFile={activeFile} removeTemporaryNode={handleRemoveTemporaryNode} onFolderToggle={expandLazyNode} />}
                 </Tree>
               )}
             </div>

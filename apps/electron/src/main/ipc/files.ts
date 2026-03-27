@@ -30,13 +30,29 @@ import { fold } from "fp-ts/lib/Tree";
 export function registerFileIpcHandlers() {
   // Deduplicate: if a tree build is already in-flight, share the result.
   const pendingTreeBuilds = new Map<string, Promise<any>>();
+  // Cache the last completed tree result per directory with a short TTL so
+  // back-to-back invalidations (e.g. 5 file:new events at startup) return the
+  // cached result instead of triggering 5 full rebuilds.
+  const treeResultCache = new Map<string, { result: any; at: number }>();
+  const TREE_RESULT_TTL = 3000; // ms — reuse a finished build for 3 s
 
   ipcMain.handle("files:tree", async (_event, directory: string) => {
     try { await fs.promises.access(directory); } catch { return null; }
-    if (pendingTreeBuilds.has(directory)) return pendingTreeBuilds.get(directory);
+    if (pendingTreeBuilds.has(directory)) {
+      return pendingTreeBuilds.get(directory);
+    }
+    const cached = treeResultCache.get(directory);
+    if (cached && Date.now() - cached.at < TREE_RESULT_TTL) {
+      return cached.result;
+    }
     const p = (async () => {
-      const gitStatusMap = await getCachedGitStatus(directory);
-      return buildFileTree(directory, gitStatusMap);
+      const [gitStatusMap] = await Promise.all([
+        getCachedGitStatus(directory),
+        fs.promises.access(directory),
+      ]);
+      const tree = await buildFileTree(directory, gitStatusMap);
+      treeResultCache.set(directory, { result: tree, at: Date.now() });
+      return tree;
     })().finally(() => pendingTreeBuilds.delete(directory));
     pendingTreeBuilds.set(directory, p);
     return p;
@@ -317,6 +333,50 @@ export function registerFileIpcHandlers() {
       return await dropFolder(targetPath, sourcePath);
     },
   );
+
+  ipcMain.handle("files:expandDir", async (_event, dirPath: string) => {
+    try {
+      const activeProject = await getActiveProject();
+      const gitStatusMap = activeProject ? await getCachedGitStatus(activeProject) : new Map();
+
+      const items = await fs.promises.readdir(dirPath, { withFileTypes: true });
+
+      const filtered = items.filter((item) => {
+        if (!item.name.startsWith(".")) return true;
+        if (
+          item.isFile() &&
+          (item.name === ".gitignore" ||
+            item.name === ".env" ||
+            item.name.startsWith(".env") ||
+            item.name.endsWith(".env"))
+        ) return true;
+        return false;
+      });
+
+      const children = filtered.map((item) => {
+        const fullPath = path.join(dirPath, item.name);
+        if (item.isDirectory()) {
+          return { name: item.name, path: fullPath, type: "folder" as const, children: [], lazy: true };
+        }
+        return {
+          name: item.name,
+          path: fullPath,
+          type: "file" as const,
+          ...(gitStatusMap?.has(fullPath) ? { git: gitStatusMap.get(fullPath) } : {}),
+        };
+      });
+
+      // Sort: folders first, then files, both alphabetically
+      children.sort((a, b) => {
+        if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+        return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+      });
+
+      return children;
+    } catch {
+      return [];
+    }
+  });
 
   ipcMain.handle("files:listDir", async (_event, dirPath: string) => {
     try {

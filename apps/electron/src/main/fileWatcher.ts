@@ -1,6 +1,7 @@
 import chokidar from "chokidar";
 import path from "node:path";
 import eventBus from "./eventBus"; // your singleton event bus
+import { invalidateGitCache } from "./git";
 
 // Store multiple watchers keyed by project path or window ID
 const fileWatchers = new Map<string, chokidar.FSWatcher>();
@@ -33,8 +34,9 @@ function debounce(func: (...args: any[]) => void, wait: number) {
 
 function createDebouncedGitEmit(projectPath: string) {
   return debounce((data: { path: string }) => {
+    invalidateGitCache(projectPath);
     eventBus.emitEvent("git:changed", { ...data, project: projectPath });
-  }, 200);
+  }, 500);
 }
 
 /**
@@ -84,11 +86,11 @@ export async function updateFileWatcher(
   const watcher = chokidar.watch(pathsToWatch, {
     persistent: true,
     ignoreInitial: true,
-    depth: 10,
+    depth: 5,
     followSymlinks: false,
     usePolling: false,
     interval: 100,
-    ignored: (filePath: string, stats?: any) => {
+    ignored: (filePath: string, _stats?: any) => {
       if (/node_modules/.test(filePath)) {
         return true;
       }
@@ -125,9 +127,6 @@ export async function updateFileWatcher(
     filePath.endsWith(".void");
 
   watcher
-    .on('ready', () => {
-      const watched = watcher.getWatched();
-    })
     .on("add", (filePath: string) => {
       if (isCloningActive(filePath)) return; // suppress during clone
       if (isGitRelated(filePath)) {
