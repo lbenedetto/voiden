@@ -67,10 +67,11 @@ export const ElectronEventProvider: React.FC<{ children: React.ReactNode }> = ({
           handleEvent("file:new", data);
         }, 400);
       },
-      "file:duplicate": (data: any) => {
+      "file:duplicate": (event: any, data: any) => {
         queryClient.invalidateQueries({ queryKey: ["files:tree"] });
-        queryClient.invalidateQueries({queryKey:['environments']});
+        queryClient.invalidateQueries({ queryKey: ["environments"] });
         queryClient.invalidateQueries({ queryKey: ["env"] });
+        handleEvent("file:duplicate", data);
       },
       "file:delete": (event: any, data: any) => {
         // Per-event: handle .env side-effect and emit immediately
