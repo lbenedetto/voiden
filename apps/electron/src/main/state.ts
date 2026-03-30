@@ -1010,24 +1010,66 @@ export const ipcStateHandlers = () => {
       }
     }
 
+    const normalizeProjectPath = (projectPath: string) => {
+      let normalized = path.resolve(projectPath);
+      normalized = normalized.replace(/[\\/]+$/, "");
+      if (process.platform === "win32") {
+        normalized = normalized.toLowerCase();
+      }
+      return normalized;
+    };
+
     // Aggregate directories from all open windows so that projects opened
     // in other windows also appear in the Recent Projects list.
-    const allDirectories: Record<string, any> = {};
+    const mergedEntries: Array<{ norm: string; projectPath: string; state: any }> = [];
+    const upsertEntry = (projectPath: string, state: any, prefer: boolean) => {
+      const norm = normalizeProjectPath(projectPath);
+      const existingIndex = mergedEntries.findIndex((entry) => entry.norm === norm);
+      if (existingIndex === -1) {
+        mergedEntries.push({ norm, projectPath, state });
+      } else if (prefer) {
+        mergedEntries[existingIndex] = { norm, projectPath, state };
+      }
+    };
+
     for (const winState of windowManager.getAllWindows()) {
       if (winState) {
         for (const [projectPath, layoutState] of Object.entries(winState.directories)) {
-          if (!allDirectories[projectPath]) {
-            allDirectories[projectPath] = layoutState;
-          }
+          upsertEntry(projectPath, layoutState, false);
         }
       }
     }
     // Current window's state takes precedence (e.g. hidden flag set in this window)
-    const mergedDirectories = { ...allDirectories, ...appState.directories };
+    for (const [projectPath, layoutState] of Object.entries(appState.directories)) {
+      upsertEntry(projectPath, layoutState, true);
+    }
 
-    const filterDirectories = Object.fromEntries(Object.entries(mergedDirectories).filter(([key, el]) => !el.hidden));
+    const projects: string[] = [];
+    let stateChanged = false;
+    for (const entry of mergedEntries) {
+      if (entry.state?.hidden) continue;
+      try {
+        const stat = await fs.stat(entry.projectPath);
+        if (!stat.isDirectory()) {
+          throw new Error("not a directory");
+        }
+        projects.push(entry.projectPath);
+      } catch {
+        if (appState.directories[entry.projectPath]) {
+          delete appState.directories[entry.projectPath];
+          stateChanged = true;
+        }
+        if (appState.activeDirectory === entry.projectPath) {
+          appState.activeDirectory = "";
+          stateChanged = true;
+        }
+      }
+    }
 
-    const projects = Object.keys(filterDirectories);
+    if (stateChanged) {
+      await saveState(appState);
+    }
+
     const activeProject = appState.activeDirectory;
     return {
       projects,

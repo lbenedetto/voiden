@@ -313,6 +313,26 @@ export async function renameFileOrDirectory(oldPath: string, newName: string) {
       };
     }
 
+    const movedVoidFiles: Array<{ oldPath: string; newPath: string }> = [];
+    const activeProject = await getActiveProject();
+    const activeProjectResolved = activeProject
+      ? path.resolve(activeProject)
+      : null;
+    const isRootRename =
+      activeProjectResolved && oldResolved === activeProjectResolved;
+    const isUnderActiveProject =
+      activeProjectResolved &&
+      (oldResolved === activeProjectResolved ||
+        oldResolved.startsWith(activeProjectResolved + path.sep));
+
+    if (isUnderActiveProject && !isRootRename) {
+      if (isDirectory) {
+        await collectVoidFiles(oldPath, newPath, movedVoidFiles);
+      } else if (oldPath.endsWith(".void")) {
+        movedVoidFiles.push({ oldPath, newPath });
+      }
+    }
+
     // If we're only changing the case, go through an intermediate name (cross-platform safe)
     if (isSamePathButDifferentCase) {
       const tempPath = path.join(dirPath, `.__rename_temp__${Date.now()}`);
@@ -322,6 +342,7 @@ export async function renameFileOrDirectory(oldPath: string, newName: string) {
       await fs.promises.rename(oldPath, newPath);
     }
 
+    await maybeUpdateLinkedBlockReferencesAfterMove(movedVoidFiles);
     return { success: true, data: { path: newPath, name: targetName } };
   } catch (error: any) {
     return { success: false, error: error.message };
