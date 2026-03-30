@@ -378,6 +378,41 @@ export function registerFileIpcHandlers() {
     }
   });
 
+  // Flat file list for the '@' file-link feature.
+  // BFS walk: skips heavy dirs, caps at 2000 results to stay memory-safe.
+  // Uses only `fs` and `path` — no imports from other main-process modules.
+  ipcMain.handle("files:flatList", async (_event, rootDir: string) => {
+    const SKIP = new Set([
+      "node_modules", ".git", "dist", "build", ".next", ".nuxt", ".cache",
+      ".turbo", ".svelte-kit", "out", ".output", ".vercel", "__pycache__",
+      ".venv", "venv", ".tox", "vendor", "Pods", ".gradle", "target",
+    ]);
+    const MAX = 2000;
+    const results: { name: string; path: string }[] = [];
+    const queue: string[] = [rootDir];
+
+    while (queue.length > 0 && results.length < MAX) {
+      const dir = queue.shift()!;
+      let entries: fs.Dirent[];
+      try {
+        entries = await fs.promises.readdir(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (entry.name.startsWith(".") && entry.name !== ".env" && !entry.name.startsWith(".env")) continue;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (!SKIP.has(entry.name)) queue.push(full);
+        } else {
+          results.push({ name: entry.name, path: full });
+          if (results.length >= MAX) break;
+        }
+      }
+    }
+    return results;
+  });
+
   ipcMain.handle("files:listDir", async (_event, dirPath: string) => {
     try {
       const entries = await fs.promises.readdir(dirPath);

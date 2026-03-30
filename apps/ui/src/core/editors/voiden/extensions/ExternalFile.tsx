@@ -233,12 +233,39 @@ export function BlockPreviewEditor({ block }: { block: JSONContent }) {
 }
 
 const FileLinkTippyContent = forwardRef((props: FileLinkListProps & { editor?: Editor }, ref) => {
-  const { items, command, editor: parentEditor } = props;
+  const { command, editor: parentEditor } = props;
   const [selectedFile, setSelectedFile] = useState<FileLinkItem | null>(null);
   const { data: voidenFiles } = useGetApyFiles();
   const [listSelectedIndex, setListSelectedIndex] = useState(0);
   const [isBlockMode, setIsBlockMode] = useState(false);
   const [multiSelectedItems, setMultiSelectedItems] = useState<(FileLinkItem | JSONContent)[]>([]);
+
+  // Own file list query — opens popup instantly, shows loading while fetching.
+  const queryClient = useQueryClient();
+  const activeDir = queryClient.getQueryData<{ activeDirectory: string }>(["app:state"])?.activeDirectory;
+  const activeProject = (queryClient.getQueryData<{ activeProject: string }>(["projects"]) as any)?.activeProject || "";
+  const { data: flatList, isPending: isLoadingFiles } = useQuery({
+    queryKey: ["files:flatList", activeDir],
+    enabled: !!activeDir,
+    staleTime: Infinity,
+    gcTime: 0,
+    queryFn: async (): Promise<{ name: string; path: string }[]> => {
+      if (!activeDir) return [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (window.electron?.files as any)?.flatList?.(activeDir) ?? [];
+    },
+  });
+
+  const allFileLinks = useMemo((): FileLinkItem[] => {
+    const addNew: FileLinkItem = { filePath: "", filename: "Add new file", isNew: true };
+    if (!flatList) return [addNew];
+    const normalizedProject = activeProject.replace(/\\/g, "/");
+    const links = flatList.map((f) => {
+      const normalizedPath = f.path.replace(/\\/g, "/");
+      return { filePath: normalizedPath.replace(normalizedProject, ""), filename: f.name };
+    });
+    return [...links, addNew];
+  }, [flatList, activeProject]);
   
   // Use refs map to track all items
   const itemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -293,9 +320,9 @@ const FileLinkTippyContent = forwardRef((props: FileLinkListProps & { editor?: E
         return [];
       }
     } else {
-      return items;
+      return allFileLinks;
     }
-  }, [isBlockMode, items, selectedFile]);
+  }, [isBlockMode, allFileLinks, selectedFile]);
 
   const filteredItems = useMemo(() => {
     if (isBlockMode) {
@@ -684,6 +711,12 @@ const FileLinkTippyContent = forwardRef((props: FileLinkListProps & { editor?: E
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-bg">
         <Folder className="text-accent" size={16} />
         <span className="font-medium text-text">Link File or Block</span>
+        {isLoadingFiles && (
+          <svg className="animate-spin h-3 w-3 ml-auto text-comment" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+          </svg>
+        )}
       </div>
 
       {/* File List */}
@@ -1063,29 +1096,9 @@ export const FileLink = Node.create<FileLinkOptions>({
               .run();
           }
         },
-        items: ({ query }) => {
-          const queryClient = getQueryClient();
-          const state = queryClient.getQueryData<{ activeDirectory: string }>(["app:state"]);
-          const activeDirPath = state?.activeDirectory;
-          const data = queryClient.getQueryData<{ files: { filePath: string; filename: string }[] }>(["files:tree", activeDirPath]);
-
-          const projects = queryClient.getQueryData<{ projects: { path: string; name: string }[]; activeProject: string }>(["projects"]);
-          const activeProject = projects?.activeProject;
-          // Retrieve the currently active document (ensure this includes the filePath)
-          const tabsData = queryClient.getQueryData(["panel:tabs", "main"]);
-          const activeDocument = tabsData?.tabs?.find((tab) => tab.id === tabsData?.activeTabId);
-          // Get all file links
-          const fileLinks = getFileLinks(data, activeProject || "");
-
-          // Handle both forward and back slashes for cross-platform compatibility
-          const getBasename = (filePath: string) => filePath?.split(/[\\/]/)?.pop();
-
-          const filteredItems = fileLinks.filter((item) => {
-            return item.filename.toLowerCase().includes(query.toLowerCase());
-          });
-
-          return [...filteredItems, { filePath: "", filename: "Add new file", isNew: true }];
-        },
+        // Return empty immediately so TipTap opens the popup without waiting.
+        // FileLinkTippyContent handles the actual file list via its own query.
+        items: () => [],
       },
     };
   },
@@ -1167,7 +1180,17 @@ export const FileLink = Node.create<FileLinkOptions>({
                 showOnCreate: true,
                 interactive: true,
                 trigger: "manual",
-                placement: "auto",
+                placement: "right-start",
+                popperOptions: {
+                  modifiers: [
+                    {
+                      name: "flip",
+                      options: {
+                        fallbackPlacements: ["left-start", "right-start", "bottom-start", "top-start"],
+                      },
+                    },
+                  ],
+                },
                 // Prevent the tippy container from becoming a focus target —
                 // focus must stay in the TipTap editor for keyboard nav to work.
                 onCreate(instance) {

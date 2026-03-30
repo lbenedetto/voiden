@@ -36,7 +36,7 @@ import {
 import { cn } from "@/core/lib/utils";
 import { FileTree } from "@/types";
 import type { SearchResult } from "@/types";
-import { useFileTree, useMove } from "@/core/file-system/hooks";
+import { useFileTree, useMove, usePrefetchFileList } from "@/core/file-system/hooks";
 import { toast } from "@/core/components/ui/sonner";
 import useResizeObserver from "use-resize-observer";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -868,6 +868,7 @@ function injectChildren(nodes: ExtendedFileTree[], targetPath: string, children:
 
 export const FileSystemList = () => {
   const { data, isPending, isFetching } = useFileTree();
+  usePrefetchFileList();
   const { data: appState } = useGetAppState();
 
   // Only show the progress bar for explicit delete operations, not every background refetch.

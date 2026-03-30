@@ -95,6 +95,7 @@ declare global {
       files: {
         tree: (projectName: string) => Promise<FileTree>;
         expandDir: (dirPath: string) => Promise<FileTree[]>;
+        flatList: (rootDir: string) => Promise<{ name: string; path: string }[]>;
         read: (path: string) => Promise<string>;
         write: (
           path: string | null,
