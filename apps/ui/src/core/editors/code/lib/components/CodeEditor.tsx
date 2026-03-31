@@ -292,11 +292,11 @@ export const CodeEditor = ({
 
     dom.addEventListener("contextmenu", handleContextMenu, true);
     dom.addEventListener("keydown", handleCopyShortcut, true);
-    dom.addEventListener("keydown", handleKeyboardShortcuts, true);
+    dom.addEventListener("keydown", handleKeyboardShortcuts, false);
     return () => {
       dom.removeEventListener("contextmenu", handleContextMenu, true);
       dom.removeEventListener("keydown", handleCopyShortcut, true);
-      dom.removeEventListener("keydown", handleKeyboardShortcuts, true);
+      dom.removeEventListener("keydown", handleKeyboardShortcuts, false);
     };
   }, [editorRef.current]);
 
@@ -400,16 +400,20 @@ export const CodeEditor = ({
   }
 
   extensions.push(
-    keymap.of([
-      {
-        key: "Ctrl-/",
-        run: (lang === "json" || lang === "jsonc") ? toggleCommentJSON : toggleComment,
-      },
-      {
-        key: "Mod-/",
-        run: (lang === "json" || lang === "jsonc") ? toggleCommentJSON : toggleComment,
-      },
-    ])
+    Prec.highest(
+      keymap.of([
+        {
+          key: "Ctrl-/",
+          run: (lang === "json" || lang === "jsonc") ? toggleCommentJSON : toggleComment,
+          preventDefault: true,
+        },
+        {
+          key: "Mod-/",
+          run: (lang === "json" || lang === "jsonc") ? toggleCommentJSON : toggleComment,
+          preventDefault: true,
+        },
+      ])
+    )
   );
 
   extensions.push(
