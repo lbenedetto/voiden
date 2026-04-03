@@ -272,19 +272,19 @@ async function main() {
 
   // ─── Summary ───────────────────────────────────────────────────────────────
 
-  const baseUrl = `https://voiden.md`;
+  const baseUrl = `https://voiden.md/apt/${suite}`;
 
   console.log(`\n✅ APT repository published to s3://${bucket}/apt/\n`);
   console.log('─── Install instructions ───────────────────────────────────\n');
 
   if (inReleaseContent || releaseGpgContent) {
     console.log('# Signed repo — users run this once to add Voiden to apt:\n');
-    console.log(`curl -fsSL ${baseUrl}/apt/voiden.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/voiden.gpg`);
-    console.log(`echo "deb [arch=${debArch} signed-by=/etc/apt/keyrings/voiden.gpg] ${baseUrl}/apt ${suite} main" \\`);
+    console.log(`curl -fsSL ${baseUrl}/voiden.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/voiden.gpg`);
+    console.log(`echo "deb [arch=${debArch} signed-by=/etc/apt/keyrings/voiden.gpg] ${baseUrl} ${suite} main" \\`);
     console.log(`  | sudo tee /etc/apt/sources.list.d/voiden.list`);
   } else {
     console.log('# Unsigned repo — users must add [trusted=yes]:\n');
-    console.log(`echo "deb [arch=${debArch} trusted=yes] ${baseUrl}/apt ${suite} main" \\`);
+    console.log(`echo "deb [arch=${debArch} trusted=yes] ${baseUrl} ${suite} main" \\`);
     console.log(`  | sudo tee /etc/apt/sources.list.d/voiden.list`);
   }
 
