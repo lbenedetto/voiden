@@ -27,6 +27,7 @@ import { globalSaveFile } from "@/core/file-system/hooks";
 import { useFocusStore } from "@/core/stores/focusStore";
 import { useSearchStore } from "@/core/stores/searchParamsStore";
 import { useEditorEnhancementStore } from "@/plugins";
+import { unifiedSearchField } from "@/core/editors/voiden/search/cmHighlightEffect";
 import { useEnvironments } from "@/core/environment/hooks";
 import { useVoidVariableData } from "@/core/runtimeVariables/hook/useVariableCapture.tsx";
 
@@ -155,7 +156,7 @@ export const CodeEditor = ({
   lang = "json",
   readOnly = false,
   onChange,
-  autofocus = true,
+  autofocus = false,
   showReplace = true,
   validateFn,
 }: CodeEditorProps) => {
@@ -218,6 +219,7 @@ export const CodeEditor = ({
   const matchCase = useSearchStore((s) => s.matchCase);
   const matchWholeWord = useSearchStore((s) => s.matchWholeWord);
   const useRegex = useSearchStore((s) => s.useRegex);
+  const isUnifiedSearchActive = useSearchStore((s) => s.isUnifiedSearchActive);
 
   useEffect(() => {
     const view = editorRef.current;
@@ -262,13 +264,17 @@ export const CodeEditor = ({
         '/', // Toggle comment
         'z', // Undo
         'y', // Redo (Windows/Linux)
-        'f', // Find
-        'h', // Replace
         'g', // Go to line
         '[', // Outdent
         ']', // Indent
         'd', // Delete line
       ];
+
+      // When embedded in TipTap, let find/replace shortcuts bubble up
+      // so the unified search panel opens instead of CM's own search
+      if (!tiptapProps) {
+        editorShortcuts.push('f', 'h');
+      }
 
       if (editorShortcuts.includes(e.key.toLowerCase())) {
         // Only stop propagation, DON'T prevent default
@@ -286,17 +292,21 @@ export const CodeEditor = ({
 
     dom.addEventListener("contextmenu", handleContextMenu, true);
     dom.addEventListener("keydown", handleCopyShortcut, true);
-    dom.addEventListener("keydown", handleKeyboardShortcuts, true);
+    dom.addEventListener("keydown", handleKeyboardShortcuts, false);
     return () => {
       dom.removeEventListener("contextmenu", handleContextMenu, true);
       dom.removeEventListener("keydown", handleCopyShortcut, true);
-      dom.removeEventListener("keydown", handleKeyboardShortcuts, true);
+      dom.removeEventListener("keydown", handleKeyboardShortcuts, false);
     };
   }, [editorRef.current]);
 
   useEffect(() => {
     const view = editorRef.current;
     if (!view) return;
+    // When unified search is active and this editor is embedded in TipTap,
+    // skip store-driven highlights to avoid double-highlighting.
+    // The unified search system handles highlighting via unifiedSearchField.
+    if (isUnifiedSearchActive && tiptapProps) return;
     view.dispatch({
       effects: searchEffect.of({
         term: searchTerm,
@@ -305,7 +315,7 @@ export const CodeEditor = ({
         useRegex,
       }),
     });
-  }, [searchTerm, matchCase, matchWholeWord, useRegex]);
+  }, [searchTerm, matchCase, matchWholeWord, useRegex, isUnifiedSearchActive]);
 
   // Get dynamic CodeMirror extensions from plugin store
   const codemirrorExtensionsFromStore = useEditorEnhancementStore((state) => state.codemirrorExtensions);
@@ -315,7 +325,11 @@ export const CodeEditor = ({
 
   const extensions = [
     searchField,
-    search({ top: true, createPanel: (view) => createCustomSearchPanel(view) }), // Add custom search panel at top
+    // Unified search highlight support (used by both VoidenEditor and ResponsePanel)
+    unifiedSearchField,
+    // When embedded in TipTap, skip CM's search extension entirely —
+    // the unified search panel handles find/replace
+    ...(tiptapProps ? [] : [search({ top: true, createPanel: (view) => createCustomSearchPanel(view) })]),
     highlightSelectionMatches(),
     EditorView.theme({
       "&": {
@@ -363,7 +377,15 @@ export const CodeEditor = ({
       return binding.key !== "Ctrl-w" && binding.key !== "Mod-w";
     })),
     keymap.of([
-      ...searchKeymap,
+      // When embedded in TipTap, filter out find/replace keybindings
+      // so they bubble up to the unified search panel
+      ...(tiptapProps
+        ? searchKeymap.filter((binding) => {
+            const key = binding.key ?? '';
+            return !key.includes('Mod-f') && !key.includes('Mod-h') &&
+                   !key.includes('Mod-g') && !key.includes('Mod-G');
+          })
+        : searchKeymap),
       { key: "Escape", run: closeSearchPanel }
     ]),
     EditorView.lineWrapping,
@@ -378,16 +400,20 @@ export const CodeEditor = ({
   }
 
   extensions.push(
-    keymap.of([
-      {
-        key: "Ctrl-/",
-        run: (lang === "json" || lang === "jsonc") ? toggleCommentJSON : toggleComment,
-      },
-      {
-        key: "Mod-/",
-        run: (lang === "json" || lang === "jsonc") ? toggleCommentJSON : toggleComment,
-      },
-    ])
+    Prec.highest(
+      keymap.of([
+        {
+          key: "Ctrl-/",
+          run: (lang === "json" || lang === "jsonc") ? toggleCommentJSON : toggleComment,
+          preventDefault: true,
+        },
+        {
+          key: "Mod-/",
+          run: (lang === "json" || lang === "jsonc") ? toggleCommentJSON : toggleComment,
+          preventDefault: true,
+        },
+      ])
+    )
   );
 
   extensions.push(
@@ -603,6 +629,8 @@ export const CodeEditor = ({
         basicSetup={{
           lineNumbers: true,
           highlightActiveLine: true,
+          // Disable built-in search when embedded in TipTap — unified search handles it
+          searchKeymap: !tiptapProps,
         }}
         onCreateEditor={(view) => {
           editorRef.current = view;

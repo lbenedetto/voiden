@@ -94,6 +94,7 @@ const getTabIcon = (tab: Tab): JSX.Element => {
   if (tab.type === "settings") return <Settings size={14} />;
   if (tab.type === "welcome") return <BookOpen size={14} />;
   if (tab.type === "changelog") return <ScrollText size={14} />;
+  if (tab.type === "logs") return <Terminal size={14} />;
   if (tab.type === "grpc") return <Server size={14} />;
   if (tab.type === "environmentEditor") return <Settings2 size={14} />;
 
@@ -639,21 +640,8 @@ export const PanelTabs = ({ panel }: { panel: string }) => {
   return (
     <div
       ref={tabContainerRef}
-      className="flex items-center h-full flex-1 overflow-x-auto relative"
-      style={{
-        scrollbarWidth: "none", // Firefox
-        msOverflowStyle: "none", // IE and Edge
-      }}
+      className="flex items-center h-full flex-1 overflow-x-auto relative no-scrollbar"
     >
-      {/* Inline style to hide scrollbar in Webkit browsers */}
-      <style>
-        {`
-          div::-webkit-scrollbar {
-            display: none;
-          }
-        `}
-      </style>
-
       {/* Drag Overlay Preview */}
       {draggedTabId && dragPreviewPosition && (
         <div

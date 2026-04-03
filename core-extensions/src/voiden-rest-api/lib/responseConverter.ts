@@ -32,6 +32,8 @@ export interface HttpResponse {
       host: string;
       port: number;
     };
+    body?: string | null;
+    bodyContentType?: string | null;
   };
   metadata?: {
     assertionResults?: {
@@ -81,6 +83,45 @@ export interface HttpResponse {
   };
 }
 
+function sanitizeDownloadFilename(filename: string): string {
+  return filename
+    .replace(/[/\\]/g, "_")
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .trim();
+}
+
+function extractContentDispositionFilename(contentDisposition: string | undefined): string | null {
+  if (!contentDisposition) return null;
+
+  const filenameStarMatch = contentDisposition.match(/filename\*\s*=\s*([^;]+)/i);
+  if (filenameStarMatch) {
+    const rawValue = filenameStarMatch[1].trim();
+    const unquoted = rawValue.replace(/^"(.*)"$/, "$1");
+    const parts = unquoted.match(/^([^']*)'[^']*'(.*)$/);
+    const encodedValue = parts ? parts[2] : unquoted;
+
+    try {
+      const decoded = decodeURIComponent(encodedValue);
+      const sanitized = sanitizeDownloadFilename(decoded);
+      if (sanitized) return sanitized;
+    } catch {
+      const sanitized = sanitizeDownloadFilename(encodedValue);
+      if (sanitized) return sanitized;
+    }
+  }
+
+  const filenameMatch = contentDisposition.match(/filename\s*=\s*("(?:[^"\\]|\\.)*"|[^;]+)/i);
+  if (!filenameMatch) return null;
+
+  const rawValue = filenameMatch[1].trim();
+  const unquoted = rawValue.startsWith('"') && rawValue.endsWith('"')
+    ? rawValue.slice(1, -1).replace(/\\"/g, '"')
+    : rawValue;
+  const sanitized = sanitizeDownloadFilename(unquoted);
+
+  return sanitized || null;
+}
+
 /**
  * Convert HTTP response to Voiden document JSON
  *
@@ -112,17 +153,9 @@ export function convertResponseToVoidenDoc(response: HttpResponse): any {
   }
 
   // Extract filename from Content-Disposition header (e.g. attachment; filename="file.ics")
-  let downloadFilename: string | null = null;
-  const contentDisposition = headersArray.find(
-    h => h.key.toLowerCase() === 'content-disposition'
-  )?.value;
-  if (contentDisposition) {
-    // Try filename*=UTF-8''... first, then filename="..."
-    const filenameStarMatch = contentDisposition.match(/filename\*\s*=\s*(?:[^']*'')?([^;\s]+)/i);
-    const filenameMatch = contentDisposition.match(/filename\s*=\s*"?([^";\s]+)"?/i);
-    const raw = filenameStarMatch ? decodeURIComponent(filenameStarMatch[1]) : filenameMatch?.[1] ?? null;
-    if (raw) downloadFilename = raw;
-  }
+  const downloadFilename = extractContentDispositionFilename(
+    headersArray.find((h) => h.key.toLowerCase() === "content-disposition")?.value
+  );
 
   // Build the Voiden document structure
   // Store metadata in doc attrs for ResponsePanelContainer to access
@@ -140,8 +173,6 @@ export function convertResponseToVoidenDoc(response: HttpResponse): any {
 
   // Add assertion results if present (inject after body)
   if (response.metadata?.assertionResults) {
-    console.log('[Response Converter] ✓ Found assertion results, injecting into response doc');
-    console.log('[Response Converter] Assertion results:', response.metadata.assertionResults);
     responseDocContent.push({
       type: 'assertion-results',
       attrs: {
@@ -151,14 +182,10 @@ export function convertResponseToVoidenDoc(response: HttpResponse): any {
         failedAssertions: response.metadata.assertionResults.failedAssertions,
       },
     });
-  } else {
-    console.log('[Response Converter] No assertion results in response.metadata');
   }
 
   // Add OpenAPI Spec result check if present
   if (response.metadata?.openAPIValidation) {
-    console.log('[Response Converter] ✓ Found OpenAPI validation results, injecting into response doc');
-    console.log('[Response Converter] OpenAPI validation:', response.metadata.openAPIValidation);
     responseDocContent.push({
       type: 'openapi-validation-results',
       attrs: {
@@ -170,8 +197,6 @@ export function convertResponseToVoidenDoc(response: HttpResponse): any {
         totalWarnings: response.metadata.openAPIValidation.warnings.length,
       },
     });
-  } else {
-    console.log('[Response Converter] No OpenAPI validation results in response.metadata');
   }
 
   // Add script assertion results if present
@@ -181,7 +206,6 @@ export function convertResponseToVoidenDoc(response: HttpResponse): any {
     response.metadata?.scriptAssertions;
 
   if (scriptAssertions) {
-    console.log('[Response Converter] ✓ Found script assertion results, injecting into response doc');
     responseDocContent.push({
       type: 'script-assertion-results',
       attrs: {
@@ -191,8 +215,6 @@ export function convertResponseToVoidenDoc(response: HttpResponse): any {
         failedAssertions: scriptAssertions.failedAssertions ?? (scriptAssertions.results || []).filter((r: any) => !r?.passed).length,
       },
     });
-  } else {
-    console.log('[Response Converter] No script assertion results in response.metadata');
   }
 
   // Add response headers and request info
@@ -211,6 +233,8 @@ export function convertResponseToVoidenDoc(response: HttpResponse): any {
         method: response.requestMeta?.method || '',
         httpVersion: response.requestMeta?.httpVersion,
         tls: response.requestMeta?.tlsInfo,
+        requestBody: response.requestMeta?.body || null,
+        requestBodyContentType: response.requestMeta?.bodyContentType || null,
       },
     }
   );
@@ -222,6 +246,7 @@ export function convertResponseToVoidenDoc(response: HttpResponse): any {
         'response-headers',
         'request-headers',
         'request-headers-security',
+        'request-body-sent',
         'assertion-results',
         'openapi-validation-results',
         'script-assertion-results',

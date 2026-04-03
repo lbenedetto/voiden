@@ -28,6 +28,7 @@ import type {
   ExtensionContext
 } from '@voiden/sdk/ui';
 import { pasteLogger } from '@/core/lib/logger';
+import { getRandomRequestName } from '@/core/editors/voiden/lib/requestNames';
 
 const md = markdownIt({ html: false });
 
@@ -192,7 +193,41 @@ export class PasteOrchestrator {
         const jsonStr = text.slice('linkblock://'.length);
         const linkedBlockData = JSON.parse(jsonStr);
 
-        // Insert the linked block
+        // Handle array of linked blocks (from section link)
+        if (Array.isArray(linkedBlockData)) {
+          const { tr, schema } = view.state;
+
+          // Resolve to end of the current top-level node
+          const $from = tr.selection.$from;
+          const topNodePos = $from.depth > 0 ? $from.before(1) : $from.pos;
+          const topNode = $from.depth > 0 ? $from.node(1) : view.state.doc.nodeAt($from.pos);
+          const insertPos = topNodePos + (topNode?.nodeSize || 0);
+
+          let offset = 0;
+
+          // Insert a request-separator first to create a proper section
+          const separatorType = schema.nodes['request-separator'];
+          if (separatorType) {
+            const separator = separatorType.create({ label: getRandomRequestName() });
+            tr.insert(insertPos + offset, separator);
+            offset += separator.nodeSize;
+          }
+
+          for (const blockData of linkedBlockData) {
+            try {
+              const node = schema.nodeFromJSON(blockData);
+              tr.insert(insertPos + offset, node);
+              offset += node.nodeSize;
+            } catch (e) {
+              pasteLogger.error('Error creating linked block node:', e);
+            }
+          }
+          view.dispatch(tr);
+          pasteLogger.info(`Pasted ${linkedBlockData.length} linked block references`);
+          return true;
+        }
+
+        // Single linked block
         const node = view.state.schema.nodeFromJSON(linkedBlockData);
         const transaction = view.state.tr.replaceSelectionWith(node);
         view.dispatch(transaction);
@@ -200,6 +235,54 @@ export class PasteOrchestrator {
         return true;
       } catch (error) {
         pasteLogger.error('Error parsing linkblock:// paste:', error);
+        return false;
+      }
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // b2) SECTIONBLOCK:// PREFIX (section copy/paste — multiple blocks)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if (text.startsWith('sectionblock://')) {
+      try {
+        const jsonStr = text.slice('sectionblock://'.length);
+        const nodesData = JSON.parse(jsonStr);
+
+        if (Array.isArray(nodesData) && nodesData.length > 0) {
+          const { tr, schema, doc } = view.state;
+
+          // Resolve to end of the current top-level node so we insert at document level
+          const $from = tr.selection.$from;
+          const topNodePos = $from.depth > 0 ? $from.before(1) : $from.pos;
+          const topNode = $from.depth > 0 ? $from.node(1) : doc.nodeAt($from.pos);
+          const insertPos = topNodePos + (topNode?.nodeSize || 0);
+
+          let offset = 0;
+
+          // Insert a request-separator first to create a proper section
+          const separatorType = schema.nodes['request-separator'];
+          if (separatorType) {
+            const separator = separatorType.create({ label: getRandomRequestName() });
+            tr.insert(insertPos + offset, separator);
+            offset += separator.nodeSize;
+          }
+
+          // Insert all content blocks after the separator
+          for (const nodeData of nodesData) {
+            try {
+              const node = schema.nodeFromJSON(nodeData);
+              tr.insert(insertPos + offset, node);
+              offset += node.nodeSize;
+            } catch (e) {
+              pasteLogger.error('Error creating node from section block data:', e);
+            }
+          }
+
+          view.dispatch(tr);
+          pasteLogger.info(`Pasted section with ${nodesData.length} blocks`);
+          return true;
+        }
+      } catch (error) {
+        pasteLogger.error('Error parsing sectionblock:// paste:', error);
         return false;
       }
     }
@@ -456,6 +539,8 @@ export class PasteOrchestrator {
     const hasBold = /\*\*.+\*\*/.test(text) || /__.+__/.test(text);
     const hasItalic = /\*.+\*/.test(text) || /_.+_/.test(text);
     const hasBlockquotes = /^>/m.test(text);
+    // GFM table: header row with |, separator row with |---
+    const hasTable = /^\|.+\|$/m.test(text) && /^\|[\s\-:|]+\|$/m.test(text);
 
     // Count how many markdown features are present
     const features = [
@@ -465,8 +550,12 @@ export class PasteOrchestrator {
       hasLinks,
       hasBold,
       hasItalic,
-      hasBlockquotes
+      hasBlockquotes,
+      hasTable,
     ].filter(Boolean).length;
+
+    // Tables are unambiguous — treat as markdown even if it's the only feature
+    if (hasTable) return true;
 
     // Only treat as markdown if it has 2 or more markdown features
     // This prevents plain text with incidental characters from being parsed as markdown

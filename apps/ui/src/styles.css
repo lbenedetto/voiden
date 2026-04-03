@@ -2,6 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─── File tree loading progress bar ─────────────────────────────────────── */
+@keyframes fileTreeProgress {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
+/* ─── Section indicator overlay lines ────────────────────────────────────── */
+.section-indicator-overlay {
+  position: absolute;
+  left: -4px;
+  width: 3px;
+  pointer-events: none;
+  z-index: 1;
+}
+
 /* ─── Date / time inputs — global theme styling ──────────────────────────── */
 
 input[type="date"],
@@ -311,6 +326,8 @@ input[type="week"]::-webkit-datetime-edit-year-field:focus {
     --modal-bg: var(--bg-primary, #1f2430);
     --titlebar-bg: var(--bg-primary, #1f2430);
 
+    --ui-surface: var(--bg-surface, color-mix(in srgb, var(--bg-primary) 60%, var(--bg-secondary)));
+
     --ui-panel-bg: var(--bg-secondary, #1c212b);
     --modal-header-bg: var(--bg-secondary, #1c212b);
     --block-header-bg: var(--bg-secondary, #1c212b);
@@ -558,7 +575,7 @@ input[type="week"]::-webkit-datetime-edit-year-field:focus {
     }
 
     ::-webkit-scrollbar-thumb {
-      background-color: rgba(255, 255, 255, 0.1);
+      background-color: color-mix(in srgb, var(--fg-secondary) 30%, transparent);
       border-radius: 3px;
     }
   }
@@ -893,14 +910,13 @@ input[type="checkbox"]:disabled {
 }
 
 #code-editor-container::-webkit-scrollbar-thumb {
-  background-color: transparent;
+  background-color: color-mix(in srgb, var(--fg-secondary) 30%, transparent);
   border-radius: 3px;
-  transition: background-color 0.2s ease;
 }
 
-/* Show scrollbar when hovering over container */
+/* Brighter when hovering over container */
 #code-editor-container:hover::-webkit-scrollbar-thumb {
-  background-color: rgba(255, 255, 255, 0.2);
+  background-color: color-mix(in srgb, var(--fg-secondary) 50%, transparent);
 }
 
 /* Brighter when hovering directly over scrollbar */
@@ -913,12 +929,65 @@ input[type="checkbox"]:disabled {
   background-color: var(--icon-primary);
 }
 
-/* Firefox - overlay scrollbar that auto-hides */
+/* Firefox */
 #code-editor-container {
   scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
+  scrollbar-color: color-mix(in srgb, var(--fg-secondary) 30%, transparent) transparent;
 }
 
-#code-editor-container:hover {
-  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+/* ─── Source sync indicator ─────────────────────────────────────────────── */
+.source-sync-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity 0.15s, background-color 0.15s;
+  position: relative;
+  vertical-align: middle;
+  margin-right: 4px;
+  float: left;
+  margin-top: 2px;
+}
+
+.source-sync-indicator:hover {
+  opacity: 1;
+  background-color: var(--ui-hover, rgba(255, 255, 255, 0.08));
+}
+
+.source-sync-indicator::before {
+  content: "";
+  display: block;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--editor-accent, #7aa2f7);
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+
+.source-sync-indicator::after {
+  content: attr(data-consumer-count);
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  font-size: 8px;
+  line-height: 1;
+  color: var(--editor-accent, #7aa2f7);
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.source-sync-indicator.source-sync-active::before {
+  border-color: var(--editor-green, #9ece6a);
+  background-color: var(--editor-green, #9ece6a);
+  animation: source-sync-pulse 0.6s ease-out;
+}
+
+@keyframes source-sync-pulse {
+  0% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.4); opacity: 0.6; }
+  100% { transform: scale(1); opacity: 1; }
 }

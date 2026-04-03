@@ -5,6 +5,7 @@ export type ResponseChildNodeType =
   | "response-headers"
   | "request-headers"
   | "request-headers-security"
+  | "request-body-sent"
   | "assertion-results"
   | "openapi-validation-results"
   | "script-assertion-results";

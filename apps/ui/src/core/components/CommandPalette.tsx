@@ -2,8 +2,8 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Search, File, Folder, FilePlus, Terminal, Settings, FolderPlus, HelpCircle, Sparkles } from 'lucide-react';
 import { useAddPanelTab } from '@/core/layout/hooks';
 import { cn } from '@/core/lib/utils';
-import { FileTree } from '@/types';
-import { useGetActiveDirectory, useFileTree, useGetActiveDocument } from '@/core/file-system/hooks/useFileSystem';
+import { useGetActiveDocument } from '@/core/file-system/hooks/useFileSystem';
+import { useGetAppState } from '@/core/state/hooks';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePanelStore } from '@/core/stores/panelStore';
 import { useCodeEditorStore } from '@/core/editors/code/CodeEditorStore';
@@ -45,8 +45,8 @@ interface Command {
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({ isFocused, mode, onFocus, onBlur, onShowHelp }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [files, setFiles] = useState<FileItem[]>([]);
-  const [filteredFiles, setFilteredFiles] = useState<FileItem[]>([]);
+  const [allFiles, setAllFiles] = useState<FileItem[]>([]);
+  const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [showDropdown, setShowDropdown] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -153,47 +153,64 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isFocused, mode,
   const [currentSuggestion, setCurrentSuggestion] = useState<string>('');
   const [isCreating, setIsCreating] = useState(false);
 
-  // Get active directory and file tree using React Query hooks
-  const { data: activeDirectory } = useGetActiveDirectory();
-  const { data: fileTree } = useFileTree();
+  // Get active directory
+  const { data: appState } = useGetAppState();
+  const activeDirectory = appState?.activeDirectory;
 
-  // Extract folders from file tree
+  // Debounce search query so we don't fire an IPC call on every keystroke
+  const [debouncedQuery, setDebouncedQuery] = useState(searchQuery);
   useEffect(() => {
-    if (!fileTree) {
-      setFolders([]);
-      return;
-    }
+    const t = setTimeout(() => setDebouncedQuery(searchQuery), 150);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
 
-    const folderPaths: string[] = []; // Don't add '.' - let users type from root
-    const extractFolders = (node: FileTree, currentRelativePath: string = '') => {
+  // Server fetch — runs on debounced query, merges new results into allFiles corpus.
+  useEffect(() => {
+    if (!isFocused || !activeDirectory || mode !== 'files') return;
 
-      if (node.type === 'folder') {
-        // Add this folder to the list if it's not the root
-        if (currentRelativePath) {
-          folderPaths.push(currentRelativePath + '/');
-        }
-
-        // Process children
-        if (node.children && Array.isArray(node.children)) {
-          node.children.forEach((child: any) => {
-            const childRelativePath = currentRelativePath
-              ? `${currentRelativePath}/${child.name}`
-              : child.name;
-            extractFolders(child, childRelativePath);
-          });
+    let cancelled = false;
+    setIsLoadingFiles(true);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window.electron?.files as any).flatList(activeDirectory, debouncedQuery || undefined).then((list: { name: string; path: string }[]) => {
+      if (cancelled) return;
+      setIsLoadingFiles(false);
+      if (!list) return;
+      const incoming: FileItem[] = list.map((f) => ({
+        path: f.path,
+        name: f.name,
+        directory: f.path.split('/').slice(0, -1).join('/') || '/',
+      }));
+      // Merge: add files not already in corpus so we accumulate across queries
+      setAllFiles((prev) => {
+        const existing = new Set(prev.map((f) => f.path));
+        const added = incoming.filter((f) => !existing.has(f.path));
+        return added.length ? [...prev, ...added] : prev;
+      });
+      // Update folder suggestions
+      const folderSet = new Set<string>();
+      for (const f of list) {
+        const relative = f.path.startsWith(activeDirectory)
+          ? f.path.slice(activeDirectory.length + 1)
+          : f.path;
+        const parts = relative.split('/');
+        for (let i = 1; i < parts.length; i++) {
+          folderSet.add(parts.slice(0, i).join('/') + '/');
         }
       }
-    };
+      setFolders((prev) => [...new Set([...prev, ...[...folderSet]])].sort());
+    });
 
-    // Start extraction from the root (fileTree is the root node)
-    if (fileTree.children && Array.isArray(fileTree.children)) {
-      fileTree.children.forEach((child: any) => {
-        extractFolders(child, child.name);
-      });
-    }
+    return () => { cancelled = true; };
+  }, [isFocused, activeDirectory, debouncedQuery, mode]);
 
-    setFolders(folderPaths.sort());
-  }, [fileTree]);
+  // Instant client-side filter on the accumulated corpus — no waiting for server
+  const filteredFiles = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return allFiles.slice(0, 50);
+    return allFiles
+      .filter((f) => f.name.toLowerCase().includes(q) || f.path.toLowerCase().includes(q))
+      .slice(0, 50);
+  }, [allFiles, searchQuery]);
 
   // Calculate autocomplete suggestion based on current input
   useEffect(() => {
@@ -478,34 +495,6 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isFocused, mode,
     setSelectedIndex(0);
   }, [searchQuery, mode, commands]);
 
-  // Flatten file tree when it changes
-  useEffect(() => {
-    if (!fileTree) {
-      setFiles([]);
-      return;
-    }
-
-    // Flatten the file tree to get all files
-    const fileItems: FileItem[] = [];
-    const flattenTree = (node: FileTree) => {
-      // If this is a file, add it to the list
-      if (node.type === 'file') {
-        const parts = node.path.split('/');
-        const name = parts[parts.length - 1];
-        const directory = parts.slice(0, -1).join('/') || '/';
-        fileItems.push({ path: node.path, name, directory });
-      }
-      // If this node has children, recursively flatten them
-      if (node.children && Array.isArray(node.children)) {
-        node.children.forEach((child: any) => flattenTree(child));
-      }
-    };
-
-    // Start flattening from the root node
-    flattenTree(fileTree);
-    setFiles(fileItems);
-  }, [fileTree]);
-
   // Focus input when palette opens
   useEffect(() => {
     if (isFocused) {
@@ -540,29 +529,6 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isFocused, mode,
     setShowDropdown(isFocused);
   }, [isFocused]);
 
-  // Filter files based on search query
-  useEffect(() => {
-    if (mode !== 'files') return;
-
-    if (!searchQuery.trim()) {
-      // Show all files when no search query (limited to 50)
-      setFilteredFiles(files.slice(0, 50));
-      setSelectedIndex(0);
-      return;
-    }
-
-    const query = searchQuery.toLowerCase();
-    const filtered = files
-      .filter((file) => {
-        const fileName = file.name.toLowerCase();
-        const filePath = file.path.toLowerCase();
-        return fileName.includes(query) || filePath.includes(query);
-      })
-      .slice(0, 50); // Limit to 50 results
-
-    setFilteredFiles(filtered);
-    setSelectedIndex(0);
-  }, [searchQuery, files, mode]);
 
   // Handle keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -669,7 +635,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isFocused, mode,
   };
 
   const handleCreateFolder = async () => {
-    const projectPath = activeDirectory || fileTree?.path;
+    const projectPath = activeDirectory;
     const rawInputPath = createFilePath.trim();
     if (!projectPath || !rawInputPath || isCreating) return;
 
@@ -721,7 +687,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isFocused, mode,
   };
 
   const handleCreateFile = async () => {
-    const projectPath = activeDirectory || fileTree?.path;
+    const projectPath = activeDirectory;
     const rawInputPath = createFilePath.trim();
     if (!projectPath || !rawInputPath || isCreating) return;
 
@@ -988,12 +954,22 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isFocused, mode,
               )
             ) : (
               // File search mode
-              filteredFiles.length === 0 ? (
-                <div className="px-4 py-4 text-center text-comment text-sm">
-                  No files found
-                </div>
-              ) : (
-                filteredFiles.map((file, index) => (
+              <>
+                {filteredFiles.length === 0 && !isLoadingFiles && (
+                  <div className="px-4 py-4 text-center text-comment text-sm">
+                    No files found
+                  </div>
+                )}
+                {filteredFiles.length === 0 && isLoadingFiles && (
+                  <div className="flex flex-col gap-2 items-center justify-center py-8">
+                    <svg className="animate-spin h-5 w-5 text-accent" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                    </svg>
+                    Loading files...
+                  </div>
+                )}
+                {filteredFiles.map((file, index) => (
                   <button
                     key={file.path}
                     className={cn(
@@ -1018,8 +994,17 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isFocused, mode,
                       </div>
                     </div>
                   </button>
-                ))
-              )
+                ))}
+                {filteredFiles.length > 0 && isLoadingFiles && (
+                  <div className="flex items-center justify-center gap-2 py-2 text-xs text-comment border-t border-border">
+                    <svg className="animate-spin h-3 w-3 text-accent" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                    </svg>
+                    Searching…
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>

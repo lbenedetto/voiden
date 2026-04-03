@@ -1,5 +1,5 @@
-import { Search, Settings, Loader2, Shield, BadgeCheck, Users, Upload } from "lucide-react";
-import { useEffect } from "react";
+import { Search, Settings, Loader2, Shield, BadgeCheck, Users, Upload, MoreVertical } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import {
   useGetExtensions,
   useInstallExtension,
@@ -55,6 +55,24 @@ const ExtensionItem = ({ extension }: { extension: Extension }) => {
         return null;
     }
   };
+
+  const typeLabel =
+    extension.type === "core"
+      ? "Core"
+      : extension.type === "verified"
+        ? "Verified"
+        : extension.type === "community"
+          ? "Community"
+          : "Extension";
+
+  const typeBadgeClass =
+    extension.type === "core"
+      ? "bg-purple-500/10 text-purple-300 border-purple-500/20"
+      : extension.type === "verified"
+        ? "bg-blue-500/10 text-blue-300 border-blue-500/20"
+        : extension.type === "community"
+          ? "bg-orange-500/10 text-orange-300 border-orange-500/20"
+          : "bg-active text-comment border-border";
 
   const handleToggleEnabled = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
@@ -149,34 +167,45 @@ const ExtensionItem = ({ extension }: { extension: Extension }) => {
   return (
     <div
       className={cn(
-        "group relative mx-2 my-1.5 rounded-lg border border-border bg-editor hover:bg-active cursor-pointer transition-colors",
-        "min-h-[80px]",
-        !extension.enabled && "opacity-60"
+        "group relative mx-2 my-2 rounded-xl border border-border bg-panel/80 hover:bg-panel cursor-pointer transition-colors shadow-sm hover:shadow-md",
+        "min-h-[90px]",
+        !extension.enabled && "opacity-70"
       )}
       onClick={() => openExtensionDetailsMutation.mutate(extension)}
     >
       {/* Main content area */}
-      <div className="p-3 pr-10">
-        <div className="flex items-start gap-2.5 mb-2">
-          {renderTypeIcon()}
+      <div className="p-4 pr-14">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5">{renderTypeIcon()}</div>
           <div className="flex-1 min-w-0">
-            <div className="flex items-baseline gap-2 mb-1">
-              <h3 className={cn(
-                "text-sm font-semibold truncate",
-                extension.enabled ? "text-text" : "text-comment"
-              )}>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3
+                className={cn(
+                  "text-sm font-semibold truncate mt-0",
+                  extension.enabled ? "text-text" : "text-comment"
+                )}
+              >
                 {extension.name}
               </h3>
-              <span className="text-xs text-comment flex-shrink-0">
-                v{extension.version}
+              <span className="text-xs text-comment flex-shrink-0">v{extension.version}</span>
+              <span className={cn("text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border", typeBadgeClass)}>
+                {typeLabel}
               </span>
+              {extension.latestVersion && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded border border-blue-500/20 text-blue-300 bg-blue-500/10">
+                  Update available
+                </span>
+              )}
             </div>
-            <p className="text-xs text-comment line-clamp-2 mb-1.5">
+            <p className="text-xs text-comment line-clamp-2 mt-1.5">
               {extension.description}
             </p>
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-comment">by</span>
+            <div className="flex items-center gap-2 text-xs text-comment mt-2">
+              <span>by</span>
               <span className="font-medium text-accent">{extension.author}</span>
+              <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded border border-border text-comment">
+                {extension.enabled ? "Enabled" : "Disabled"}
+              </span>
             </div>
           </div>
         </div>
@@ -208,6 +237,7 @@ const ExtensionItem = ({ extension }: { extension: Extension }) => {
 export const ExtensionBrowser = () => {
   const { data: extensions, isLoading } = useGetExtensions();
   const installFromZip = useInstallExtensionFromZip();
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     if (installFromZip.isError) {
@@ -217,38 +247,77 @@ export const ExtensionBrowser = () => {
 
   if (isLoading) return <div>Loading...</div>;
 
+  const filteredExtensions = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return extensions || [];
+    return (extensions || []).filter((extension) => {
+      const haystack = [
+        extension.name,
+        extension.description,
+        extension.author,
+        extension.id,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [extensions, search]);
+
   return (
     <div className="flex flex-col h-full">
-      {/* <div className="flex items-center gap-2 h-8 px-2 bg-stone-900 border-b border-stone-700/80">
-        <div className="w-4 flex-none">
-          <Search size={14} />
-        </div>
-
-        <input
-          placeholder="Search extensions..."
-          className="flex-1 bg-transparent outline-none text-base placeholder:text-stone-400 truncate min-w-0"
-          type="text"
-        />
-      </div> */}
-
       <div className="px-2 pt-2">
-        <button
-          onClick={() => installFromZip.mutate()}
-          disabled={installFromZip.isPending}
-          className="w-full flex items-center justify-center gap-2 px-3 py-1.5 text-xs text-comment hover:text-text bg-editor hover:bg-active border border-border rounded-md transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {installFromZip.isPending ? (
-            <Loader2 size={14} className="animate-spin" />
-          ) : (
-            <Upload size={14} />
-          )}
-          {installFromZip.isPending ? "Installing..." : "Install from file"}
-        </button>
+        <div className="flex items-center gap-2 h-9 px-3 bg-panel border border-border rounded-lg">
+          <Search size={14} className="text-comment" />
+          <input
+            placeholder="Search extensions..."
+            className="flex-1 bg-transparent outline-none text-sm placeholder:text-comment/70 truncate min-w-0"
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <DropdownMenu.Root modal={false}>
+            <DropdownMenu.Trigger asChild>
+              <button
+                className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-active transition-colors text-comment"
+                aria-label="Extension actions"
+              >
+                <MoreVertical size={14} />
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                side="bottom"
+                align="end"
+                sideOffset={8}
+                className="bg-editor z-[9999] outline-none min-w-[180px] border border-border rounded-md shadow-lg p-1"
+              >
+                <DropdownMenu.Item
+                  onClick={() => installFromZip.mutate()}
+                  disabled={installFromZip.isPending}
+                  className="w-full px-3 py-2 text-xs text-left text-text hover:bg-active outline-none cursor-pointer rounded-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {installFromZip.isPending ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    <Upload size={12} />
+                  )}
+                  {installFromZip.isPending ? "Installing..." : "Install from zip"}
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        </div>
       </div>
 
       <div className=" border-border flex-1 flex flex-col mb-1.5 overflow-y-scroll" >
         <div className="bg-bg h-full  border-border  mb-2">
-          {extensions?.map((extension) => <ExtensionItem key={extension.id} extension={extension} />)}
+          {filteredExtensions?.map((extension) => <ExtensionItem key={extension.id} extension={extension} />)}
+          {!filteredExtensions?.length && (
+            <div className="px-4 py-10 text-center text-comment text-sm">
+              No extensions found.
+            </div>
+          )}
         </div>
       </div>
     </div>

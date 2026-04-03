@@ -1,6 +1,8 @@
-import { app, dialog, shell, BrowserWindow } from "electron";
+import { app, dialog, shell, BrowserWindow, ipcMain } from "electron";
 import path from "node:path";
 import fs from "node:fs";
+import { logger } from "./logger";
+import { setDeleting } from "./fileWatcher";
 import { TreeNode, FolderNode, FileTreeItem } from "../types";
 import { addTab } from "./tabs";
 import { aggregateGitStatus } from "./git";
@@ -22,64 +24,116 @@ const sortNodes = (nodes: TreeNode[]): TreeNode[] => {
   });
 };
 
+/**
+ * Bounded concurrency semaphore — limits parallel directory reads across the
+ * entire recursive tree walk so we get parallelism without heap OOM.
+ * 16 slots: fast on large projects while keeping memory usage stable.
+ */
+class IOSemaphore {
+  private slots: number;
+  private queue: Array<() => void> = [];
+  constructor(max: number) { this.slots = max; }
+  acquire(): Promise<void> {
+    if (this.slots > 0) { this.slots--; return Promise.resolve(); }
+    return new Promise(resolve => this.queue.push(resolve));
+  }
+  release() {
+    const next = this.queue.shift();
+    if (next) { next(); } else { this.slots++; }
+  }
+}
+
+// Directories whose contents are too large to eagerly walk.
+// Defined once outside the recursive function so the Set is not recreated
+// on every directory level (buildFileTree can be called thousands of times).
+const LAZY_DIRS = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  ".next",
+  ".nuxt",
+  ".cache",
+  ".turbo",
+  ".svelte-kit",
+  "out",
+  ".output",
+  ".vercel",
+  "__pycache__",
+  ".venv",
+  "venv",
+  ".tox",
+  "vendor",
+  "Pods",
+  ".gradle",
+  "target",
+]);
+
 export const buildFileTree = async (
   dir: string,
   gitStatusMap?: Map<string, any>,
+  _sem?: IOSemaphore,
 ): Promise<TreeNode> => {
-  const items = fs.readdirSync(dir, { withFileTypes: true });
-  const nodes = await Promise.all(
-    items
-      .filter((item) => {
-        // Allow all non-dot files.
-        if (!item.name.startsWith(".")) return true;
-        // For dot files, allow .gitignore and any .env file (like .env, .env.dev, .env.prod, etc).
-        if (
-          item.isFile() &&
-          (item.name === ".gitignore" ||
-            item.name === ".env" ||
-            item.name.startsWith(".env") ||
-            item.name.endsWith(".env"))
-        ) {
-          return true;
-        }
-        // Otherwise, filter it out.
-        return false;
-      })
-      .map(async (item) => {
-        const fullPath = path.join(dir, item.name);
-        if (item.isDirectory()) {
-          // Recursively build the subtree.
-          const subtree = await buildFileTree(fullPath, gitStatusMap);
-          // Aggregate Git status from children.
-          const aggregatedGitStatus = aggregateGitStatus(
-            subtree.children || [],
-          );
-          return {
-            name: item.name,
-            path: fullPath,
-            type: "folder" as const,
-            children: sortNodes(subtree.children || []),
-            aggregatedGitStatus,
-          };
-        }
-        // For file nodes, attach Git status if available.
-        return {
-          name: item.name,
-          path: fullPath,
-          type: "file" as const,
-          ...(gitStatusMap?.has(fullPath)
-            ? { git: gitStatusMap.get(fullPath) }
-            : {}),
-        };
-      }),
-  );
-  return {
+  const sem = _sem ?? new IOSemaphore(16);
+
+  await sem.acquire();
+  let items: fs.Dirent[];
+  try {
+    items = await fs.promises.readdir(dir, { withFileTypes: true });
+  } finally {
+    sem.release();
+  }
+
+  const filtered = items.filter((item) => {
+    if (!item.name.startsWith(".")) return true;
+    if (
+      item.isFile() &&
+      (item.name === ".gitignore" ||
+        item.name === ".env" ||
+        item.name.startsWith(".env") ||
+        item.name.endsWith(".env"))
+    ) {
+      return true;
+    }
+    return false;
+  });
+
+  // Process all siblings in parallel, bounded by the shared semaphore.
+  // This replaces the previous sequential for...of loop — same OOM safety
+  // (semaphore caps concurrency at 16) but much faster for wide trees.
+  const nodes = await Promise.all(filtered.map(async (item) => {
+    const fullPath = path.join(dir, item.name);
+    if (item.isDirectory()) {
+      // All subdirectories are lazy — never recurse at startup.
+      // Children load on demand via files:expandDir when the user expands a folder.
+      return {
+        name: item.name,
+        path: fullPath,
+        type: "folder" as const,
+        children: [],
+        lazy: true,
+      } as TreeNode;
+    } else {
+      return {
+        name: item.name,
+        path: fullPath,
+        type: "file" as const,
+        ...(gitStatusMap?.has(fullPath)
+          ? { git: gitStatusMap.get(fullPath) }
+          : {}),
+      } as TreeNode;
+    }
+  }));
+
+  const result: TreeNode = {
     name: path.basename(dir),
     path: dir,
     type: "folder" as const,
     children: sortNodes(nodes),
     aggregatedGitStatus: aggregateGitStatus(nodes),
   };
+
+  return result;
 };
 
 export async function createFile(
@@ -142,10 +196,15 @@ export async function deleteFile(filePath: string) {
     detail: `The file "${path.basename(filePath)}" will be moved to trash.`,
   });
 
-  // If user confirms (clicks Delete)
   if (response === 1) {
-    // Unwatch the path first to release file handles on Windows
-    await shell.trashItem(filePath);
+    logger.info('filesystem', `Delete file: ${path.basename(filePath)}`, { path: filePath });
+    setDeleting(filePath, true);
+    try {
+      await shell.trashItem(filePath);
+    } finally {
+      setDeleting(filePath, false);
+    }
+    logger.info('filesystem', `File trashed: ${path.basename(filePath)}`, { path: filePath });
     return true;
   }
   return false;
@@ -218,9 +277,14 @@ export async function deleteDirectory(dirPath: string) {
   });
 
   if (response === 1) {
-    // Unwatch the path first to release file handles on Windows
-    // This prevents "permission denied" errors when file watcher is active
-    await fs.promises.rm(dirPath, { recursive: true, force: true });
+    logger.info('filesystem', `Delete folder: ${path.basename(dirPath)}`, { path: dirPath });
+    setDeleting(dirPath, true);
+    try {
+      await shell.trashItem(dirPath);
+    } finally {
+      setDeleting(dirPath, false);
+    }
+    logger.info('filesystem', `Folder trashed: ${path.basename(dirPath)}`, { path: dirPath });
     return true;
   }
   return false;
@@ -261,6 +325,26 @@ export async function renameFileOrDirectory(oldPath: string, newName: string) {
       };
     }
 
+    const movedVoidFiles: Array<{ oldPath: string; newPath: string }> = [];
+    const activeProject = await getActiveProject();
+    const activeProjectResolved = activeProject
+      ? path.resolve(activeProject)
+      : null;
+    const isRootRename =
+      activeProjectResolved && oldResolved === activeProjectResolved;
+    const isUnderActiveProject =
+      activeProjectResolved &&
+      (oldResolved === activeProjectResolved ||
+        oldResolved.startsWith(activeProjectResolved + path.sep));
+
+    if (isUnderActiveProject && !isRootRename) {
+      if (isDirectory) {
+        await collectVoidFiles(oldPath, newPath, movedVoidFiles);
+      } else {
+        movedVoidFiles.push({ oldPath, newPath });
+      }
+    }
+
     // If we're only changing the case, go through an intermediate name (cross-platform safe)
     if (isSamePathButDifferentCase) {
       const tempPath = path.join(dirPath, `.__rename_temp__${Date.now()}`);
@@ -270,6 +354,7 @@ export async function renameFileOrDirectory(oldPath: string, newName: string) {
       await fs.promises.rename(oldPath, newPath);
     }
 
+    await maybeUpdateLinkedBlockReferencesAfterMove(movedVoidFiles);
     return { success: true, data: { path: newPath, name: targetName } };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -356,6 +441,7 @@ export type MoveResult = {
   moved: string[];
   conflicts: MoveConflict[];
   error?: string;
+  pathMappings?: Array<{ oldPath: string; newPath: string }>;
 };
 
 async function collectVoidFiles(
@@ -365,8 +451,7 @@ async function collectVoidFiles(
 ) {
   const stat = await fs.promises.stat(oldBasePath);
   if (stat.isFile()) {
-    if (oldBasePath.endsWith(".void"))
-      out.push({ oldPath: oldBasePath, newPath: newBasePath });
+    out.push({ oldPath: oldBasePath, newPath: newBasePath });
     return;
   }
   if (!stat.isDirectory()) return;
@@ -378,7 +463,7 @@ async function collectVoidFiles(
     const newEntry = path.join(newBasePath, entry.name);
     if (entry.isDirectory()) {
       await collectVoidFiles(oldEntry, newEntry, out);
-    } else if (entry.isFile() && entry.name.endsWith(".void")) {
+    } else if (entry.isFile()) {
       out.push({ oldPath: oldEntry, newPath: newEntry });
     }
   }
@@ -391,6 +476,7 @@ export async function moveFiles(
   const moved: string[] = [];
   const conflicts: MoveConflict[] = [];
   const movedVoidFiles: Array<{ oldPath: string; newPath: string }> = [];
+  const pathMappings: Array<{ oldPath: string; newPath: string }> = [];
 
   try {
     for (const dragId of dragIds) {
@@ -403,12 +489,13 @@ export async function moveFiles(
       }
 
       await collectVoidFiles(dragId, newPath, movedVoidFiles);
+      pathMappings.push({ oldPath: dragId, newPath });
       await fs.promises.rename(dragId, newPath);
       moved.push(dragId);
     }
 
     await maybeUpdateLinkedBlockReferencesAfterMove(movedVoidFiles);
-    return { success: true, moved, conflicts };
+    return { success: true, moved, conflicts, pathMappings };
   } catch (error) {
     return { success: false, moved, conflicts, error: error.message };
   }
@@ -416,8 +503,9 @@ export async function moveFiles(
 
 export async function moveFilesForce(
   conflicts: MoveConflict[],
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; pathMappings?: Array<{ oldPath: string; newPath: string }> }> {
   const movedVoidFiles: Array<{ oldPath: string; newPath: string }> = [];
+  const pathMappings: Array<{ oldPath: string; newPath: string }> = [];
 
   try {
     for (const { dragId, targetPath } of conflicts) {
@@ -432,14 +520,100 @@ export async function moveFilesForce(
         await fs.promises.unlink(targetPath);
       }
       await collectVoidFiles(dragId, targetPath, movedVoidFiles);
+      pathMappings.push({ oldPath: dragId, newPath: targetPath });
       await fs.promises.rename(dragId, targetPath);
     }
 
     await maybeUpdateLinkedBlockReferencesAfterMove(movedVoidFiles);
-    return { success: true };
+    return { success: true, pathMappings };
   } catch (error) {
     return { success: false, error: error.message };
   }
+}
+
+/** Apply void-file reference path updates to a source string.
+ *  Returns the updated source and the number of references rewritten. */
+function applyVoidFileReferenceUpdates(
+  source: string,
+  movedByOldRel: Map<string, string>,
+): { updatedSource: string; count: number } {
+  const normalizeRefPath = (value: string) =>
+    value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
+  const isUuid = (value: string) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  const originalFileLineRegex = /^(\s*originalFile:\s*)(['"]?)([^'"\r\n]+)\2(\s*)$/gm;
+  const filePathLineRegex = /^(\s*filePath:\s*)(['"]?)([^'"\r\n]+)\2(\s*)$/gm;
+  const voidFenceRegex = /```void\s*\r?\n([\s\S]*?)```/g;
+
+  let count = 0;
+
+  function rewritePathLine(
+    lineText: string,
+    prefix: string,
+    quote: string,
+    refValue: string,
+    suffix: string,
+  ): string {
+    const normalizedRef = normalizeRefPath(refValue.trim());
+    const newRel = movedByOldRel.get(normalizedRef);
+    if (!newRel) return lineText;
+    const keepBackslash = refValue.includes("\\");
+    const sep = keepBackslash ? "\\" : "/";
+    const relWithSep = newRel.replace(/\//g, sep);
+    let nextRefValue = relWithSep;
+    if (refValue.startsWith("./") || refValue.startsWith(".\\")) {
+      nextRefValue = `.${sep}${relWithSep}`;
+    } else if (refValue.startsWith("/") || refValue.startsWith("\\")) {
+      nextRefValue = `${sep}${relWithSep}`;
+    }
+    count++;
+    return `${prefix}${quote}${nextRefValue}${quote}${suffix}`;
+  }
+
+  const updatedSource = source.replace(voidFenceRegex, (fenceText, body: string) => {
+    if (/^\s*type:\s*linkedBlock\s*$/m.test(body)) {
+      const uidMatch = body.match(/^\s*blockUid:\s*([^\r\n]+)\s*$/m);
+      if (!uidMatch || !isUuid(uidMatch[1].trim())) return fenceText;
+      const updatedBody = body.replace(originalFileLineRegex, (l, p, q, v, s) =>
+        rewritePathLine(l, p, q, v, s),
+      );
+      return fenceText.replace(body, updatedBody);
+    }
+    if (/^\s*type:\s*fileLink\s*$/m.test(body)) {
+      const updatedBody = body.replace(filePathLineRegex, (l, p, q, v, s) =>
+        rewritePathLine(l, p, q, v, s),
+      );
+      return fenceText.replace(body, updatedBody);
+    }
+    return fenceText;
+  });
+
+  return { updatedSource, count };
+}
+
+/** Ask all renderer windows to flush unsaved content for the given file paths to disk.
+ *  Waits up to 3 seconds for acknowledgment before proceeding. */
+function flushRendererUnsavedForPaths(paths: string[]): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const windows = BrowserWindow.getAllWindows();
+    if (windows.length === 0) {
+      resolve();
+      return;
+    }
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const ackChannel = `files:unsavedSavedAck:${requestId}`;
+    const timeout = setTimeout(() => {
+      ipcMain.removeAllListeners(ackChannel);
+      resolve();
+    }, 3000);
+    ipcMain.once(ackChannel, () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+    for (const w of windows) {
+      w.webContents.send("files:saveUnsavedForPaths", requestId, paths);
+    }
+  });
 }
 
 async function maybeUpdateLinkedBlockReferencesAfterMove(
@@ -452,12 +626,6 @@ async function maybeUpdateLinkedBlockReferencesAfterMove(
 
   const normalizeRel = (projectRoot: string, absolutePath: string) =>
     path.relative(projectRoot, absolutePath).replace(/\\/g, "/");
-  const normalizeRefPath = (value: string) =>
-    value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
-  const isUuid = (value: string) =>
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      value,
-    );
 
   const movedByOldRel = new Map<string, string>();
   for (const moved of movedVoidFiles) {
@@ -482,75 +650,14 @@ async function maybeUpdateLinkedBlockReferencesAfterMove(
   };
   await collectAllVoidFiles(activeProject);
 
-  const originalFileLineRegex =
-    /^(\s*originalFile:\s*)(['"]?)([^'"\r\n]+)\2(\s*)$/gm;
-  const filePathLineRegex = /^(\s*filePath:\s*)(['"]?)([^'"\r\n]+)\2(\s*)$/gm;
-  const voidFenceRegex = /```void\s*\r?\n([\s\S]*?)```/g;
   const fileUpdates = new Map<string, string>();
   let totalReferences = 0;
 
-  /** Rewrite a path value if it matches a moved file, invoking onMatch on update. */
-  function rewritePathLine(
-    lineText: string,
-    prefix: string,
-    quote: string,
-    refValue: string,
-    suffix: string,
-    onMatch: () => void,
-  ): string {
-    const normalizedRef = normalizeRefPath(refValue.trim());
-    const newRel = movedByOldRel.get(normalizedRef);
-    if (!newRel) return lineText;
-    const keepBackslash = refValue.includes("\\");
-    const sep = keepBackslash ? "\\" : "/";
-    const relWithSep = newRel.replace(/\//g, sep);
-    let nextRefValue = relWithSep;
-    if (refValue.startsWith("./") || refValue.startsWith(".\\")) {
-      nextRefValue = `.${sep}${relWithSep}`;
-    } else if (refValue.startsWith("/") || refValue.startsWith("\\")) {
-      nextRefValue = `${sep}${relWithSep}`;
-    }
-    onMatch();
-    return `${prefix}${quote}${nextRefValue}${quote}${suffix}`;
-  }
-
   for (const voidFilePath of allVoidFiles) {
     const source = await fs.promises.readFile(voidFilePath, "utf8");
-    let fileReferenceCount = 0;
-
-    const updatedSource = source.replace(
-      voidFenceRegex,
-      (fenceText, body: string) => {
-        // linkedBlock: update originalFile
-        if (/^\s*type:\s*linkedBlock\s*$/m.test(body)) {
-          const uidMatch = body.match(/^\s*blockUid:\s*([^\r\n]+)\s*$/m);
-          if (!uidMatch || !isUuid(uidMatch[1].trim())) return fenceText;
-          const updatedBody = body.replace(
-            originalFileLineRegex,
-            (l, p, q, v, s) =>
-              rewritePathLine(l, p, q, v, s, () => {
-                fileReferenceCount += 1;
-              }),
-          );
-          return fenceText.replace(body, updatedBody);
-        }
-
-        // fileLink: update filePath
-        if (/^\s*type:\s*fileLink\s*$/m.test(body)) {
-          const updatedBody = body.replace(filePathLineRegex, (l, p, q, v, s) =>
-            rewritePathLine(l, p, q, v, s, () => {
-              fileReferenceCount += 1;
-            }),
-          );
-          return fenceText.replace(body, updatedBody);
-        }
-
-        return fenceText;
-      },
-    );
-
-    if (fileReferenceCount > 0 && updatedSource !== source) {
-      totalReferences += fileReferenceCount;
+    const { updatedSource, count } = applyVoidFileReferenceUpdates(source, movedByOldRel);
+    if (count > 0 && updatedSource !== source) {
+      totalReferences += count;
       fileUpdates.set(voidFilePath, updatedSource);
     }
   }
@@ -564,11 +671,23 @@ async function maybeUpdateLinkedBlockReferencesAfterMove(
     defaultId: 1,
     cancelId: 0,
     title: "Update References?",
-    message: "A .void file was moved.",
+    message: "A file was moved or renamed.",
     detail: `References in other file(s) still point to the old path. Found ${totalReferences} reference(s) in ${fileUpdates.size} file(s). Update them to the new location?`,
   });
 
   if (response !== 1) return;
+
+  // Flush any unsaved renderer content for the files we're about to rewrite,
+  // then re-read from disk so we apply reference updates on top of the latest content.
+  await flushRendererUnsavedForPaths(Array.from(fileUpdates.keys()));
+
+  for (const [filePath] of fileUpdates) {
+    const freshSource = await fs.promises.readFile(filePath, "utf8");
+    const { updatedSource, count } = applyVoidFileReferenceUpdates(freshSource, movedByOldRel);
+    if (count > 0 && updatedSource !== freshSource) {
+      fileUpdates.set(filePath, updatedSource);
+    }
+  }
 
   for (const [filePath, content] of fileUpdates) {
     await fs.promises.writeFile(filePath, content, "utf8");

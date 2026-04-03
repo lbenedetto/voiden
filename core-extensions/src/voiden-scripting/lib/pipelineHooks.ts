@@ -126,7 +126,7 @@ export async function preProcessingScriptHook(context: any): Promise<void> {
   try {
     // @ts-ignore - Path resolved at runtime in app context
     const { expandLinkedBlocksInDoc } = await import(/* @vite-ignore */ '@/core/editors/voiden/utils/expandLinkedBlocks');
-    editorJson = await expandLinkedBlocksInDoc(editorJson);
+    editorJson = await expandLinkedBlocksInDoc(editorJson, { forceRefresh: true });
   } catch {
     // Continue with unexpanded document
   }

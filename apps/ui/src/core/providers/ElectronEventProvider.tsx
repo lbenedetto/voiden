@@ -3,7 +3,7 @@ import React, { createContext, useContext, useEffect, useRef } from "react";
 import { EventEmitter } from "events";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { globalSaveFile } from "@/core/file-system/hooks";
+import { globalSaveFile, saveTabById } from "@/core/file-system/hooks";
 import { useLoadEnv, useSetActiveEnv } from "@/core/environment/hooks";
 import { toast } from "@/core/components/ui/sonner";
 
@@ -32,6 +32,13 @@ export const ElectronEventProvider: React.FC<{ children: React.ReactNode }> = ({
   // Track if listeners are currently attached
   const listenersAttachedRef = useRef(false);
 
+  // Debounce timers — prevent IPC flood during clone/bulk file ops
+  const fileTreeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gitChangedDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileDeleteDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dirDeleteDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileNewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     // Handler for all electron events
     const handleEvent = (channel: string, data: unknown) => {
@@ -49,28 +56,42 @@ export const ElectronEventProvider: React.FC<{ children: React.ReactNode }> = ({
         handleEvent("file:newTab", data);
       },
       "file:new": (data: any) => {
-        queryClient.invalidateQueries({ queryKey: ["files:tree"] });
-        queryClient.invalidateQueries({ queryKey: ["panel:tabs"], exact: false });
-        queryClient.invalidateQueries({ queryKey: ["tab:content"], exact: false });
-        queryClient.invalidateQueries({ queryKey: ["env"] });
-        handleEvent("file:new", data);
+        // Debounce: during clone this fires for every file written to disk.
+        // Only refresh the file tree and env — new files on disk don't affect
+        // open tab content or the tab list (file:newTab handles that separately).
+        if (fileNewDebounceRef.current) clearTimeout(fileNewDebounceRef.current);
+        fileNewDebounceRef.current = setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ["files:tree"] });
+          queryClient.invalidateQueries({ queryKey: ["env"] });
+          handleEvent("file:new", data);
+        }, 400);
       },
-      "file:duplicate": (data: any) => {
+      "file:duplicate": (event: any, data: any) => {
         queryClient.invalidateQueries({ queryKey: ["files:tree"] });
-        queryClient.invalidateQueries({queryKey:['environments']});
+        queryClient.invalidateQueries({ queryKey: ["environments"] });
         queryClient.invalidateQueries({ queryKey: ["env"] });
+        handleEvent("file:duplicate", data);
+      },
+      "git:clone:progress": (_event: any, data: any) => {
+        handleEvent("git:clone:progress", data);
+      },
+      "file:delete-start": (_event: any) => {
+        handleEvent("file:delete-start", {});
       },
       "file:delete": (event: any, data: any) => {
-        queryClient.invalidateQueries({ queryKey: ["files:tree"] });
-        queryClient.invalidateQueries({ queryKey: ["panel:tabs"], exact: false });
-        queryClient.invalidateQueries({ queryKey: ["tab:content"], exact: false });
-        queryClient.invalidateQueries({ queryKey: ["voiden-wrapper:blockContent"], exact: false });
-        queryClient.invalidateQueries({ queryKey: ["env"] });
-        // If the deleted file is .env, trigger a refetch of envs
+        // Per-event: handle .env side-effect and emit immediately
         if (data.path.replace(/\\/g, "/").split("/").pop()?.startsWith(".env")) {
           setActiveEnv(null);
         }
         handleEvent("file:delete", data);
+        // Debounce heavy invalidations — folder deletes fire this per-file
+        if (fileDeleteDebounceRef.current) clearTimeout(fileDeleteDebounceRef.current);
+        fileDeleteDebounceRef.current = setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ["files:tree"] });
+          queryClient.invalidateQueries({ queryKey: ["panel:tabs"], exact: false });
+          queryClient.invalidateQueries({ queryKey: ["voiden-wrapper:blockContent"], exact: false });
+          queryClient.invalidateQueries({ queryKey: ["env"] });
+        }, 400);
       },
       "file:create": (event: any, data: any) => {
         handleEvent("file:create", data);
@@ -82,6 +103,11 @@ export const ElectronEventProvider: React.FC<{ children: React.ReactNode }> = ({
         handleEvent("directory:create", data);
       },
       "directory:close-project": (event: any, data: any) => {
+        queryClient.removeQueries({
+          predicate: (query) => typeof query.queryKey[0] === "string" && (query.queryKey[0] as string).startsWith("git:"),
+        });
+        queryClient.invalidateQueries({ queryKey: ["app:state"] });
+        queryClient.invalidateQueries({ queryKey: ["files:tree"] });
         handleEvent("directory:close-project", data);
       },
       "file:rename": (event: any, data: any) => {
@@ -94,11 +120,18 @@ export const ElectronEventProvider: React.FC<{ children: React.ReactNode }> = ({
         queryClient.invalidateQueries({ queryKey: ["env"] });
       },
       "files:tree:changed": () => {
-        queryClient.invalidateQueries({ queryKey: ["files:tree"] });
-        queryClient.invalidateQueries({ queryKey: ['env'] });
+        // Debounce: during clone/bulk ops this fires per-file. Batch into one refresh.
+        if (fileTreeDebounceRef.current) clearTimeout(fileTreeDebounceRef.current);
+        fileTreeDebounceRef.current = setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ["files:tree"] });
+          queryClient.invalidateQueries({ queryKey: ['env'] });
+        }, 400);
       },
       "folder:opened": (data: any) => {
-        // Invalidate queries related to projects or app state.
+        // Clear all git cache so the new project's git state is fetched fresh.
+        queryClient.removeQueries({
+          predicate: (query) => typeof query.queryKey[0] === "string" && (query.queryKey[0] as string).startsWith("git:"),
+        });
         queryClient.invalidateQueries({ queryKey: ["projects"] });
         queryClient.invalidateQueries({ queryKey: ["app:state"] });
         queryClient.invalidateQueries({ queryKey: ["panel:tabs"], exact: false });
@@ -106,17 +139,28 @@ export const ElectronEventProvider: React.FC<{ children: React.ReactNode }> = ({
         queryClient.invalidateQueries({ queryKey: ["files:tree"] });
         queryClient.invalidateQueries({ queryKey: ["sidebar:tabs"], exact: false });
         queryClient.invalidateQueries({ queryKey: ["env"] });
-
-        // Optionally, you can also invalidate other queries that depend on the active project.
+        queryClient.invalidateQueries({ queryKey: ["extensions"] });
         handleEvent("folder:opened", data);
       },
-      "git:changed": async (data: any) => {
-        queryClient.invalidateQueries({ queryKey: ["files:tree"] });
-        queryClient.invalidateQueries({ queryKey: ["git:branches"] });
-        queryClient.invalidateQueries({ queryKey: ["git:status"] });
-        queryClient.invalidateQueries({ queryKey: ["git:log"] });
-
-        handleEvent("git:changed", data);
+      // Fired by the main process once initializeState() completes and the
+      // window state + extensionManager are fully ready.  Re-fetches queries
+      // that may have received empty/error responses during the startup race.
+      "state:ready": () => {
+        queryClient.invalidateQueries({ queryKey: ["app:state"] });
+        queryClient.invalidateQueries({ queryKey: ["extensions"] });
+        queryClient.invalidateQueries({ queryKey: ["sidebar:tabs"], exact: false });
+        queryClient.invalidateQueries({ queryKey: ["projects"] });
+      },
+      "git:changed": (data: any) => {
+        // Debounce: git:changed fires repeatedly during checkout/clone
+        if (gitChangedDebounceRef.current) clearTimeout(gitChangedDebounceRef.current);
+        gitChangedDebounceRef.current = setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ["files:tree"] });
+          queryClient.invalidateQueries({ queryKey: ["git:branches"] });
+          queryClient.invalidateQueries({ queryKey: ["git:status"] });
+          queryClient.invalidateQueries({ queryKey: ["git:log"] });
+          handleEvent("git:changed", data);
+        }, 400);
       },
       "env:changed": (data: any) => {
         queryClient.invalidateQueries({ queryKey: ["env"] });
@@ -128,15 +172,16 @@ export const ElectronEventProvider: React.FC<{ children: React.ReactNode }> = ({
         queryClient.invalidateQueries({ queryKey: ["voiden-wrapper:blockContent", data.path], exact: false });
         handleEvent("apy:changed", data);
       },
-      "directory:delete": (event: any) => {
-        // console.debug("directory:delete", event);
-        // Invalidate the same queries as with file:delete
-        queryClient.invalidateQueries({ queryKey: ["files:tree"] });
-        queryClient.invalidateQueries({ queryKey: ["panel:tabs"], exact: false });
-        queryClient.invalidateQueries({ queryKey: ["tab:content"], exact: false });
-        queryClient.invalidateQueries({ queryKey: ["voiden-wrapper:blockContent"], exact: false });
-        queryClient.invalidateQueries({ queryKey: ["env"] });
-        handleEvent("directory:delete", event.data);
+      "directory:delete": (_event: any, data: any) => {
+        handleEvent("directory:delete", data);
+        // Debounce — may arrive alongside many file:delete events for each child
+        if (dirDeleteDebounceRef.current) clearTimeout(dirDeleteDebounceRef.current);
+        dirDeleteDebounceRef.current = setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ["files:tree"] });
+          queryClient.invalidateQueries({ queryKey: ["panel:tabs"], exact: false });
+          queryClient.invalidateQueries({ queryKey: ["voiden-wrapper:blockContent"], exact: false });
+          queryClient.invalidateQueries({ queryKey: ["env"] });
+        }, 400);
       },
       "file-menu-command": (event: any, data: any) => {
         if (data && data.command === "save-file") {
@@ -173,6 +218,9 @@ export const ElectronEventProvider: React.FC<{ children: React.ReactNode }> = ({
       "menu:open-changelog": (event: any, data: any) => {
         handleEvent("menu:open-changelog", data || {});
       },
+      "menu:open-logs": (event: any, data: any) => {
+        handleEvent("menu:open-logs", data || {});
+      },
       "window:changed": () => {
         queryClient.invalidateQueries({ queryKey: ["environments"] });
         queryClient.invalidateQueries({ queryKey: ["env"] });
@@ -197,7 +245,14 @@ export const ElectronEventProvider: React.FC<{ children: React.ReactNode }> = ({
       },
       "toast:info": (event: any, data: any) => {
         toast.info(data.title, { description: data.description || undefined,duration: data.duration || 4000 ,closeButton:true} );
-      }
+      },
+      "files:saveUnsavedForPaths": async (_event: any, requestId: string, paths: string[]) => {
+        const panelTabs = queryClient.getQueryData<{ tabs: { id: string; source: string | null }[]; activeTabId: string }>(["panel:tabs", "main"]);
+        const tabs = panelTabs?.tabs ?? [];
+        const matchingTabs = tabs.filter((t) => t.source && paths.includes(t.source));
+        await Promise.all(matchingTabs.map((t) => saveTabById(t.id, { silent: true })));
+        window.electron?.files.acknowledgeUnsavedSaved(requestId);
+      },
     };
 
     // Only attach listeners if not already attached (handles React Strict Mode)

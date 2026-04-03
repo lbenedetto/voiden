@@ -7,7 +7,7 @@
 import React from "react";
 import { mergeAttributes, Node } from "@tiptap/core";
 import { ReactNodeViewRenderer } from "@tiptap/react";
-import { Eye, Pen, ExternalLink, FileDown, Link, Loader2, X, CircleX } from "lucide-react";
+import { Eye, Pen, ExternalLink, FileDown, Link, Loader2, X, CircleX, Play } from "lucide-react";
 import { Buffer } from "buffer";
 import {
   GraphQLField,
@@ -22,7 +22,7 @@ import {
 import { extractOperations, parseQuerySelections } from "../utils/query-parser";
 import { generateQuery } from "../utils/query-generator";
 
-export const createGraphQLQueryNode = (NodeViewWrapper: any, CodeEditor: any, RequestBlockHeader: any) => {
+export const createGraphQLQueryNode = (NodeViewWrapper: any, CodeEditor: any, RequestBlockHeader: any, useSendRestRequest?: any) => {
   const getDefaultTemplate = (type: string) => {
     switch (type) {
       case 'mutation':
@@ -35,6 +35,7 @@ export const createGraphQLQueryNode = (NodeViewWrapper: any, CodeEditor: any, Re
   };
 
   const GraphQLQueryComponent = (props: any) => {
+    const sendRequest = useSendRestRequest ? useSendRestRequest(props.editor) : null;
     const fileInputRef = React.useRef<HTMLInputElement>(null);
     const [mode, setMode] = React.useState<'editor' | 'viewer'>('editor');
     const [schema, setSchema] = React.useState<ParsedSchema | null>(null);
@@ -42,6 +43,7 @@ export const createGraphQLQueryNode = (NodeViewWrapper: any, CodeEditor: any, Re
     const [selectedOperations, setSelectedOperations] = React.useState<Set<string>>(new Set());
     const [activeTab, setActiveTab] = React.useState<'query' | 'mutation' | 'subscription'>('query');
     const [showConnectionInput, setShowConnectionInput] = React.useState(false);
+    const [endpointUrl, setEndpointUrl] = React.useState(props.node.attrs.endpoint || '');
     const [connectionUrl, setConnectionUrl] = React.useState(props.node.attrs.schemaUrl || '');
     const [isConnecting, setIsConnecting] = React.useState(false);
     const [connectionError, setConnectionError] = React.useState('');
@@ -116,6 +118,15 @@ export const createGraphQLQueryNode = (NodeViewWrapper: any, CodeEditor: any, Re
         setConnectionUrl(foundUrl || 'http://');
       }
     }, [showConnectionInput]);
+
+    // Sync endpoint URL to node attributes
+    React.useEffect(() => {
+      if (props.node.attrs.endpoint !== endpointUrl) {
+        props.updateAttributes({
+          endpoint: endpointUrl || null,
+        });
+      }
+    }, [endpointUrl]);
 
     React.useEffect(() => {
       if (props.node.attrs.schemaUrl !== connectionUrl) {
@@ -317,6 +328,10 @@ export const createGraphQLQueryNode = (NodeViewWrapper: any, CodeEditor: any, Re
 
         if (parsedSchema) {
           setSchema(parsedSchema);
+          // Auto-populate endpoint URL if not already set
+          if (!endpointUrl) {
+            setEndpointUrl(connectionUrl);
+          }
           props.updateAttributes({
             schemaUrl: connectionUrl,
             schemaFileName: null,
@@ -1078,6 +1093,7 @@ export const createGraphQLQueryNode = (NodeViewWrapper: any, CodeEditor: any, Re
 
     const hasSchema = (props.node.attrs.schemaFileName || props.node.attrs.schemaUrl) && schema;
     const currentOperationType = props.node.attrs.operationType || 'query';
+    const isEditable = props.editor.isEditable;
 
     return (
       <NodeViewWrapper>
@@ -1088,39 +1104,66 @@ export const createGraphQLQueryNode = (NodeViewWrapper: any, CodeEditor: any, Re
             editor={props.editor}
           />
 
-          {/* Schema file selector */}
+          {/* Endpoint URL */}
+          <div className="bg-panel border-t border-b border-border px-3 py-1.5 flex items-center gap-2">
+            <span className="text-xs text-comment font-medium uppercase tracking-wide shrink-0">POST</span>
+            <input
+              type="text"
+              value={endpointUrl}
+              onChange={(e) => isEditable && setEndpointUrl(e.target.value)}
+              readOnly={!isEditable}
+              placeholder="https://api.example.com/graphql"
+              className={`flex-1 px-2 py-1 bg-editor border border-border rounded text-sm text-text placeholder-comment focus:outline-none transition-colors font-mono ${isEditable ? 'focus:border-accent' : 'cursor-default'}`}
+            />
+            {sendRequest && (
+              <button
+                className="flex items-center justify-center w-7 h-7 rounded-md border hover:bg-hover text-status-success transition-colors shrink-0"
+                onClick={(e) => {
+                  sendRequest.refetchFromElement(e.currentTarget as HTMLElement);
+                }}
+                style={{ borderColor: 'var(--ui-line)', cursor: 'pointer', userSelect: 'none' }}
+                title="Send request"
+              >
+                <Play size={12} />
+              </button>
+            )}
+          </div>
+
+          {/* Schema file selector — only show controls when editable */}
           {!props.node.attrs.schemaFileName && !props.node.attrs.schemaUrl && !showConnectionInput ? (
-            <div className="bg-panel border-t border-b border-border px-3 py-2">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".graphql,.gql"
-                onChange={handleFileSelect}
-                className="hidden"
-                id="graphql-schema-input"
-              />
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  className="text-sm text-accent hover:text-accent/80 transition-colors cursor-pointer flex items-center gap-1.5 group"
-                  onClick={() => {
-                    setShowConnectionInput(false);
-                    fileInputRef.current?.click()
-                  }}
-                  title="Import schema"
-                >
-                  <FileDown className="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  className="text-sm text-accent hover:text-accent/80 transition-colors cursor-pointer flex items-center gap-1.5 group"
-                  onClick={() => setShowConnectionInput(!showConnectionInput)}
-                  title="Connect to GraphQL endpoint"
-                >
-                  <Link className="w-4 h-4" />
-                </button>
+            isEditable ? (
+              <div className="bg-panel border-t border-b border-border px-3 py-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".graphql,.gql"
+                  onChange={handleFileSelect}
+                  className="hidden"
+                  id="graphql-schema-input"
+                />
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    className="text-sm text-accent hover:text-accent/80 transition-colors cursor-pointer flex items-center gap-1.5 group"
+                    onClick={() => {
+                      setShowConnectionInput(false);
+                      fileInputRef.current?.click()
+                    }}
+                    title="Import schema"
+                  >
+                    <FileDown className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    className="text-sm text-accent hover:text-accent/80 transition-colors cursor-pointer flex items-center gap-1.5 group"
+                    onClick={() => setShowConnectionInput(!showConnectionInput)}
+                    title="Connect to GraphQL endpoint"
+                  >
+                    <Link className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-            </div>
+            ) : null
           ) : (
             <div className="bg-panel border-t border-b border-border px-3 py-2">
               <div className="flex items-center justify-between">
@@ -1129,27 +1172,29 @@ export const createGraphQLQueryNode = (NodeViewWrapper: any, CodeEditor: any, Re
                     {props.node.attrs.schemaFileName || props.node.attrs.schemaUrl}
                   </span>
                 </div>
-                <button
-                  className="text-xs px-2 py-1 text-red-400 hover:text-text hover:bg-active rounded transition-colors"
-                  onClick={() => {
-                    props.updateAttributes({
-                      schemaFileName: null,
-                      schemaFilePath: null,
-                      schemaUrl: null,
-                    });
-                    setSchema(null);
-                    setShowConnectionInput(false);
-                    if (fileInputRef.current) fileInputRef.current.value = '';
-                  }}
-                >
-                  <X size={14} />
-                </button>
+                {isEditable && (
+                  <button
+                    className="text-xs px-2 py-1 text-red-400 hover:text-text hover:bg-active rounded transition-colors"
+                    onClick={() => {
+                      props.updateAttributes({
+                        schemaFileName: null,
+                        schemaFilePath: null,
+                        schemaUrl: null,
+                      });
+                      setSchema(null);
+                      setShowConnectionInput(false);
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                    }}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
               </div>
             </div>
           )}
 
           {/* Connection URL input */}
-          {showConnectionInput && !props.node.attrs.schemaFileName && (
+          {isEditable && showConnectionInput && !props.node.attrs.schemaFileName && (
             <div className="bg-panel border-b border-border px-3 py-2">
               <div className="flex items-center gap-2">
                 <input
@@ -1196,8 +1241,8 @@ export const createGraphQLQueryNode = (NodeViewWrapper: any, CodeEditor: any, Re
 
           {/* Mode toggle and operation selector */}
           <div className="bg-panel border-b border-border px-3 py-2 flex items-center gap-2">
-            {/* Mode toggle - only show if schema is loaded */}
-            {hasSchema && (
+            {/* Mode toggle - only show if schema is loaded and editable */}
+            {hasSchema && isEditable && (
               <>
                 <button
                   onClick={() => setMode('editor')}
@@ -1245,7 +1290,8 @@ export const createGraphQLQueryNode = (NodeViewWrapper: any, CodeEditor: any, Re
                 }}
                 lang="graphql"
                 showReplace={false}
-                autofocus={true}
+                autofocus={isEditable && !props.node.attrs.importedFrom}
+                readOnly={!isEditable || !!props.node.attrs.importedFrom}
                 onChange={handleEditorChange}
               />
             </div>
@@ -1624,6 +1670,9 @@ export const createGraphQLQueryNode = (NodeViewWrapper: any, CodeEditor: any, Re
         operationType: {
           default: "", // auto-detect from body: query | mutation | subscription
         },
+        endpoint: {
+          default: null, // GraphQL endpoint URL for request execution
+        },
         schemaFileName: {
           default: null,
         },
@@ -1632,6 +1681,9 @@ export const createGraphQLQueryNode = (NodeViewWrapper: any, CodeEditor: any, Re
         },
         schemaUrl: {
           default: null,
+        },
+        importedFrom: {
+          default: undefined,
         },
       };
     },

@@ -4,15 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 // Valid font families from SettingsScreen
 const VALID_FONT_FAMILIES = [
-  "System Default",
   "Inconsolata",
   "Geist Mono",
   "JetBrains Mono",
   "Fira Code"
 ];
-
-// System Default maps to platform monospace stack
-const SYSTEM_DEFAULT_MONO = "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace";
 
 // Validation ranges
 const FONT_SIZE_MIN = 10;
@@ -20,7 +16,7 @@ const FONT_SIZE_MAX = 20;
 const UI_FONT_SIZE_MIN = 10;
 const UI_FONT_SIZE_MAX = 16;
 const AUTO_SAVE_DELAY_MIN = 0;
-const AUTO_SAVE_DELAY_MAX = 300;
+const AUTO_SAVE_DELAY_MAX = 1800;
 const DEFAULT_PROJECT_DIRECTORY = "Voiden";
 const CONTENT_WIDTH_MIN = 600;
 const CONTENT_WIDTH_MAX = 1400;
@@ -49,11 +45,24 @@ function validateSettings(settings: UserSettings): UserSettings {
     validated.appearance.ui_font_size = 13; // Default fallback
   }
 
-  // Validate content width
+  // Validate content width (0 = no limit)
   if (typeof validated.appearance.content_width !== 'number' ||
-    validated.appearance.content_width < CONTENT_WIDTH_MIN ||
-    validated.appearance.content_width > CONTENT_WIDTH_MAX) {
+    (validated.appearance.content_width !== 0 &&
+      (validated.appearance.content_width < CONTENT_WIDTH_MIN ||
+        validated.appearance.content_width > CONTENT_WIDTH_MAX))) {
     validated.appearance.content_width = 860; // Default fallback
+  }
+
+  // Validate separator alignment
+  if (!validated.appearance.separator_alignment ||
+    !["left", "center", "right"].includes(validated.appearance.separator_alignment)) {
+    validated.appearance.separator_alignment = "center"; // Default fallback
+  }
+
+  // Validate response panel position
+  if (!validated.appearance.response_panel_position ||
+    !["right", "bottom"].includes(validated.appearance.response_panel_position)) {
+    validated.appearance.response_panel_position = "right"; // Default fallback
   }
 
   // Validate auto save delay
@@ -214,6 +223,14 @@ function validateSettings(settings: UserSettings): UserSettings {
     validated.history.retention_days = 2;
   }
 
+  if (!validated.developer) {
+    validated.developer = { system_log: false };
+  }
+
+  if (typeof validated.developer.system_log !== 'boolean') {
+    validated.developer.system_log = false;
+  }
+
   return validated;
 }
 
@@ -237,6 +254,8 @@ export type UserSettings = {
     cursor_type: "text" | "default" | "pointer";
     code_wrap: boolean;
     content_width: number; // px, max width for document content area
+    separator_alignment: "left" | "center" | "right";
+    response_panel_position: "right" | "bottom";
   };
   editor: {
     auto_save: boolean;
@@ -274,6 +293,10 @@ export type UserSettings = {
     /** How many days to retain history entries (1–7, default: 2) */
     retention_days: number;
   };
+  developer?: {
+    /** Show the System Log tab (default: false) */
+    system_log: boolean;
+  };
 };
 
 function useDebounced(fn: (...a: any[]) => void, ms: number) {
@@ -299,9 +322,7 @@ export function useSettings() {
 
   useEffect(() => {
     if (settings?.appearance?.font_family) {
-      const cssFont = settings.appearance.font_family === "System Default"
-        ? SYSTEM_DEFAULT_MONO
-        : `"${settings.appearance.font_family}", monospace`;
+      const cssFont = `"${settings.appearance.font_family}", monospace`;
       document.documentElement.style.setProperty("--font-family-base", cssFont);
       document.documentElement.style.setProperty("--font-family-mono", cssFont);
     }
@@ -317,28 +338,11 @@ export function useSettings() {
   }, [settings?.appearance?.ui_font_size]);
 
   useEffect(() => {
-    if (settings?.appearance?.content_width) {
+    const width = settings?.appearance?.content_width;
+    if (width != null) {
       document.documentElement.style.setProperty(
         "--prose-max-width",
-        `${settings.appearance.content_width}px`
-      );
-    }
-  }, [settings?.appearance?.content_width]);
-
-  useEffect(() => {
-    if (settings?.appearance?.content_width) {
-      document.documentElement.style.setProperty(
-        "--prose-max-width",
-        `${settings.appearance.content_width}px`
-      );
-    }
-  }, [settings?.appearance?.content_width]);
-
-  useEffect(() => {
-    if (settings?.appearance?.content_width) {
-      document.documentElement.style.setProperty(
-        "--prose-max-width",
-        `${settings.appearance.content_width}px`
+        width === 0 ? "100%" : `${width}px`
       );
     }
   }, [settings?.appearance?.content_width]);
@@ -372,6 +376,7 @@ export function useSettings() {
       cli: { ...currentSettings.cli, ...patch.cli },
       projects: { ...currentSettings.projects, ...patch.projects },
       history: { ...currentSettings.history, ...patch.history },
+      developer: { ...currentSettings.developer, ...patch.developer },
     };
     const validatedSettings = validateSettings(mergedSettings as UserSettings);
 

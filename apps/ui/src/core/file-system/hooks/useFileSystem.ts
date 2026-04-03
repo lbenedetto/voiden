@@ -129,6 +129,27 @@ export const useFileTree = () => {
   });
 };
 
+/**
+ * Kicks off a one-time flat file list fetch when the project opens.
+ * Results are cached for the entire session (staleTime: Infinity) so the
+ * '@' file-link suggestion can read them synchronously without any IPC delay.
+ * Mount this hook wherever the file tree is already mounted.
+ */
+export const usePrefetchFileList = () => {
+  const { data: appState } = useGetAppState();
+  const activeDirectory = appState?.activeDirectory;
+  useQuery({
+    queryKey: ["files:flatList", activeDirectory],
+    enabled: !!activeDirectory,
+    staleTime: Infinity,
+    gcTime: 0,
+    queryFn: async (): Promise<{ name: string; path: string }[]> => {
+      if (!activeDirectory) return [];
+      return window.electron?.files.flatList(activeDirectory) ?? [];
+    },
+  });
+};
+
 export const useReadFile = () => {
   const { data: activeDirectory } = useGetActiveDirectory();
   const { data: activeFile } = useGetActiveDocument();

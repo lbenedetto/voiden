@@ -15,7 +15,7 @@ import { createResponseBodyNode } from './nodes/ResponseBodyNode';
 import manifest from './manifest.json';
 import React from 'react';
 import { createResponseDocNode } from './nodes/ResponseDocNode';
-import { CopyCurlButton } from './components/CopyCurlButton';
+// CopyCurlButton available inline on MethodNode — top-bar action removed
 
 type EditorTab = { title?: string; content?: string; tabId?: string };
 
@@ -151,13 +151,14 @@ const voidenRestApiPlugin = (context: PluginContext) => {
         createPathParamsTableNodeView,
         createURLTableNodeView,
         createMultipartTableNodeView,
-        createCookiesTableNodeView
+        createCookiesTableNodeView,
+        createOptionsTableNodeView
       } = await import('./nodes/index');
       const { createRestFileNode } = await import('./nodes/RestFile');
 
       // Create nodes with context components and hooks
       const { NodeViewWrapper, CodeEditor, RequestBlockHeader } = context.ui.components;
-      const { useSendRestRequest, useParentResponseDoc } = context.ui.hooks;
+      const { useSendRestRequest, useParentResponseDoc, useResponseBodyHeight } = context.ui.hooks;
 
       const JsonNode = createJsonNode(NodeViewWrapper, CodeEditor, RequestBlockHeader, context.project.openFile);
       const XMLNode = createXMLNode(NodeViewWrapper, CodeEditor, RequestBlockHeader, context.project.openFile);
@@ -172,6 +173,7 @@ const voidenRestApiPlugin = (context: PluginContext) => {
       const URLTableNodeView = createURLTableNodeView(RequestBlockHeader, context.project.openFile);
       const MultipartTableNodeView = createMultipartTableNodeView(RequestBlockHeader, context.project.openFile);
       const CookiesTableNodeView = createCookiesTableNodeView(RequestBlockHeader, context.project.openFile);
+      const OptionsTableNodeView = createOptionsTableNodeView(RequestBlockHeader, context.project.openFile);
 
       // Register Tiptap nodes for HTTP requests
       context.registerVoidenExtension(RequestNode);
@@ -183,6 +185,7 @@ const voidenRestApiPlugin = (context: PluginContext) => {
       context.registerVoidenExtension(URLTableNodeView);
       context.registerVoidenExtension(MultipartTableNodeView);
       context.registerVoidenExtension(CookiesTableNodeView);
+      context.registerVoidenExtension(OptionsTableNodeView);
       context.registerVoidenExtension(JsonNode);
       context.registerVoidenExtension(XMLNode);
       context.registerVoidenExtension(YmlNode);
@@ -193,7 +196,7 @@ const voidenRestApiPlugin = (context: PluginContext) => {
       const ResponseStatusNode = createResponseStatusNode(NodeViewWrapper);
       const ResponseHeadersNode = createResponseHeadersNode(NodeViewWrapper, CodeEditor, useParentResponseDoc);
       const RequestHeadersNode = createRequestHeadersNode(NodeViewWrapper, CodeEditor, useParentResponseDoc);
-      const ResponseBodyNode = createResponseBodyNode(NodeViewWrapper, CodeEditor, useParentResponseDoc);
+      const ResponseBodyNode = createResponseBodyNode(NodeViewWrapper, CodeEditor, useParentResponseDoc, useResponseBodyHeight);
       const ResponseDocNode = createResponseDocNode(NodeViewWrapper);
       context.registerVoidenExtension(ResponseStatusNode);
       context.registerVoidenExtension(ResponseHeadersNode);
@@ -216,6 +219,7 @@ const voidenRestApiPlugin = (context: PluginContext) => {
         'url-table',
         'multipart-table',
         'cookies-table',
+        'options-table',
         'json_body',
         'xml_body',
         'yml_body',
@@ -237,6 +241,7 @@ const voidenRestApiPlugin = (context: PluginContext) => {
         'query-table': 'Query Params',
         'rest-query': 'Query Params',
         'cookies-table': 'Cookies',
+        'options-table': 'Options',
         'path-table': 'Path Params',
         'rest-params': 'Path Params',
         'rest-file': 'File Upload',
@@ -249,50 +254,50 @@ const voidenRestApiPlugin = (context: PluginContext) => {
       });
 
 
-      // Register Copy cURL action
-      context.registerEditorAction({
-        id: "copy-curl-button",
-        component: (props: any) =>
-          React.createElement(CopyCurlButton, {
-            tab: props?.tab,
-            context: context
-          }),
-        predicate: (tab) => {
-          const name = tab?.title?.toLowerCase() || "";
-          if (!name.endsWith(".void")) return false;
-
-          let content = tab?.content || "";
-          // If unsaved content exists, use it exclusively as the source of truth
-          const store = getEditorStore();
-          if (tab?.tabId && store) {
-            const unsaved = store.getState().unsaved[tab.tabId];
-            if (unsaved) {
-              try {
-                const doc = JSON.parse(unsaved);
-                return doc?.content?.some((node: any) =>
-                  node.type === 'api' || node.type === 'request'
-                ) ?? false;
-              } catch {
-                return false;
-              }
-            }
-          }
-
-          // No unsaved content — fall back to saved file content
-          if (typeof content !== 'string' || content.trim().length === 0) return false;
-
-          try {
-            const fenceRegex = /```\s*void([\s\S]*?)```/gi;
-            let match;
-            while ((match = fenceRegex.exec(content)) !== null) {
-              if (/type:\s*request/i.test(match[1] || '')) return true;
-            }
-            return false;
-          } catch {
-            return false;
-          }
-        },
+      // Register table cell autocomplete suggestions
+      context.registerTableSuggestions('headers-table', {
+        0: [
+          { label: 'Accept' },
+          { label: 'Accept-Encoding' },
+          { label: 'Accept-Language' },
+          { label: 'Authorization' },
+          { label: 'Cache-Control' },
+          { label: 'Content-Type' },
+          { label: 'Cookie' },
+          { label: 'Host' },
+          { label: 'Origin' },
+          { label: 'Referer' },
+          { label: 'User-Agent' },
+          { label: 'X-Requested-With' },
+        ],
+        1: [
+          { label: 'application/json' },
+          { label: 'application/xml' },
+          { label: 'application/x-www-form-urlencoded' },
+          { label: 'multipart/form-data' },
+          { label: 'text/plain' },
+          { label: 'text/html' },
+          { label: 'text/xml' },
+          { label: 'application/javascript' },
+          { label: 'application/pdf' },
+          { label: 'application/octet-stream' },
+          { label: 'image/jpeg' },
+          { label: 'image/png' },
+        ],
       });
+
+      context.registerTableSuggestions('options-table', {
+        0: [
+          { label: 'follow_redirects', description: 'Follow HTTP redirects (true/false)' },
+        ],
+        1: [
+          { label: 'true' },
+          { label: 'false' },
+        ],
+      });
+
+      // Copy cURL button is available inline next to the endpoint (MethodNode)
+      // Top-bar action removed to avoid duplication
 
 
 
@@ -300,28 +305,17 @@ const voidenRestApiPlugin = (context: PluginContext) => {
       context.onBuildRequest(async (request, editor) => {
 
         try {
-          // Dynamic import of getRequest function and environment hooks from app
+          // Get the JSON from the editor (linked blocks are already expanded by the orchestrator)
+          const editorJson = editor.getJSON();
+
+          // Skip GraphQL documents — the GraphQL plugin handles its own request building
+          if (editorJson.content?.some((n: any) => n.type === 'gqlquery')) {
+            return request;
+          }
+
+          // Dynamic import of getRequest function from app
           // @ts-ignore - Path resolved at runtime in app context
           const { getRequest } = await import(/* @vite-ignore */ '@/core/request-engine/getRequestFromJson');
-
-          // @ts-ignore - Path resolved at runtime in app context
-          const { useEnvironments } = await import(/* @vite-ignore */ '@/core/environment/hooks');
-
-          // Get active environment from app's environment system
-          // Access the query client to get current environment data
-          // @ts-ignore - Path resolved at runtime in app context
-          const { getQueryClient } = await import(/* @vite-ignore */ '@/main');
-          const queryClient = getQueryClient();
-          const envData = queryClient.getQueryData(['environments']) as any;
-          const activeEnv = envData?.activeEnv ? envData.data[envData.activeEnv] : undefined;
-
-          // Get the JSON from the editor
-          let editorJson = editor.getJSON();
-
-          // Expand any linked blocks so plugins can access their content
-          // @ts-ignore - Path resolved at runtime in app context
-          const { expandLinkedBlocksInDoc } = await import(/* @vite-ignore */ '@/core/editors/voiden/utils/expandLinkedBlocks');
-          editorJson = await expandLinkedBlocksInDoc(editorJson);
 
           // Build request WITHOUT environment variables
           // Environment variables will be replaced securely in Electron (Stage 3)
@@ -338,14 +332,11 @@ const voidenRestApiPlugin = (context: PluginContext) => {
       context.onProcessResponse(async (response) => {
         const perfStart = performance.now();
 
-        // Only handle REST protocol or GraphQL query/mutation responses
-        // Let other protocols (GraphQL subscriptions, gRPC, WebSocket) be handled by their respective plugins
+        // Only handle REST protocol responses
+        // GraphQL, gRPC, WebSocket are handled by their respective plugins
         const isRest = response.protocol && (response.protocol === 'rest' || response.protocol === 'http' || response.protocol === 'https');
-        const isGraphQLQueryOrMutation = response.protocol === 'graphql' &&
-          response.operationType &&
-          (response.operationType === 'query' || response.operationType === 'mutation');
 
-        if (!isRest && !isGraphQLQueryOrMutation) {
+        if (!isRest) {
           return;
         }
 
@@ -369,6 +360,17 @@ const voidenRestApiPlugin = (context: PluginContext) => {
             wsId: response.wsId || '',
           });
 
+          // Attach section info for "scroll to request" linking and color matching
+          if (response.__sectionIndex !== undefined && responseDoc?.attrs) {
+            responseDoc.attrs.sectionIndex = response.__sectionIndex;
+          }
+          if (response.__sectionColorIndex !== undefined && responseDoc?.attrs) {
+            responseDoc.attrs.sectionColorIndex = response.__sectionColorIndex;
+          }
+          if (response.__sectionLabel && responseDoc?.attrs) {
+            responseDoc.attrs.sectionLabel = response.__sectionLabel;
+          }
+
           // Open a new Voiden tab with the response
           const openStart = performance.now();
           await context.openVoidenTab(
@@ -386,6 +388,7 @@ const voidenRestApiPlugin = (context: PluginContext) => {
 
       // Import paste utilities
       const { convertCurlToRequest, pasteCurl } = await import('./index');
+      const { showCurlPasteDialog, appendCurlAsNewSection } = await import('./nodes/curlPaste');
 
       // Register block owners (read from manifest)
       const blockTypes = manifest.capabilities.blocks.owns;
@@ -462,17 +465,26 @@ const voidenRestApiPlugin = (context: PluginContext) => {
                 return false;
               }
 
-              // Confirm replacement if editor is not empty
               if (!editor.isEmpty) {
-                const proceed = window.confirm('Pasting this cURL request will replace the current content. Do you want to proceed?');
-                if (!proceed) {
-                  return true; // Handled but cancelled
-                }
-              }
+                // Determine current section label for dialog
+                const cursorPos = editor.state.selection.$from.pos;
+                let sectionLabel: string | undefined;
+                editor.state.doc.forEach((child: any, offset: number) => {
+                  if (child.type.name === "request-separator" && offset < cursorPos) {
+                    sectionLabel = child.attrs?.label || undefined;
+                  }
+                });
 
-              // Delegate to pasteCurl for full async handling
-              // (includes file path resolution and fileLink nodes for multipart)
-              (async () => { await pasteCurl(editor, request); })();
+                showCurlPasteDialog(sectionLabel).then(async (choice) => {
+                  if (choice === "replace") {
+                    await pasteCurl(editor, request);
+                  } else if (choice === "append") {
+                    await appendCurlAsNewSection(editor, request);
+                  }
+                });
+              } else {
+                (async () => { await pasteCurl(editor, request); })();
+              }
 
               return true;
             } catch (error) {

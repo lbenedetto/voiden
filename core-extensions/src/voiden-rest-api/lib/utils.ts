@@ -31,7 +31,7 @@ export const getNodeType = (editor: Editor) => {
     const isImportedBlock = node?.attrs.importedFrom;
     const type: string = node?.type.name;
     if (isImportedBlock) return `${type}--imported`;
-    if (["headers-table", "query-table", "url-table", "multipart-table", "path-table", "cookies-table"].includes(type)) return type;
+    if (["headers-table", "query-table", "url-table", "multipart-table", "path-table", "cookies-table", "options-table"].includes(type)) return type;
     return "table";
   }
 
@@ -39,8 +39,28 @@ export const getNodeType = (editor: Editor) => {
 };
 
 export const insertRequestTableNode = (editor: Editor, sourceRange: Range, tableType: string) => {
+  // Find section boundaries around the cursor (between request-separator nodes)
+  const cursorPos = sourceRange.from;
+  let sectionStart = 0;
+  let sectionEnd = editor.state.doc.content.size;
+  editor.state.doc.forEach((child, offset) => {
+    const nodeStart = offset + 1;
+    const nodeEnd = nodeStart + child.nodeSize;
+    if (child.type.name === "request-separator") {
+      if (cursorPos >= nodeEnd) {
+        sectionStart = nodeEnd;
+      } else if (sectionEnd === editor.state.doc.content.size && cursorPos < nodeStart) {
+        sectionEnd = nodeStart;
+      }
+    }
+  });
+
+  // Only check for existing nodes within the current section
   const existingNodes = editor.$nodes(tableType);
-  const existingDocNode = existingNodes?.find((node) => !node.attributes.importedFrom);
+  const existingDocNode = existingNodes?.find((node) => {
+    if (node.attributes.importedFrom) return false;
+    return node.from >= sectionStart && node.from < sectionEnd;
+  });
   if (existingDocNode) {
     editor.chain().focus(existingDocNode.to).deleteRange(sourceRange).run();
   } else {

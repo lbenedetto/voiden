@@ -1,5 +1,115 @@
 [
   {
+    "version": "v1.4.3-beta.1",
+    "date": "02/04/2026",
+    "title": "File Explorer & Git Polish",
+    "description": "Beta release improving file explorer performance with lazy loading for large projects, inline rename on duplicate, smarter file link and search loading, and a range of git and editor fixes.",
+    "icon": "FolderOpen",
+    "iconColor": "text-amber-400",
+    "bgColor": "bg-gradient-to-br from-amber-900 to-orange-900",
+    "changes": {
+      "Added": [
+        "Inline rename on duplicate — duplicating a file now immediately opens an inline rename input so you can name it in one step, without needing to right-click and rename separately",
+        "Developer settings — a new Developer section in settings with a toggle to show System Logs, giving you a real-time view of internal process timings to diagnose slow operations and share logs with the Voiden team for inspection"
+      ],
+      "Improved": [
+        "File explorer lazy loading to handle large projects without performance degradation",
+        "File link and search file now load results progressively at a threshold to avoid overwhelming and hanging Voiden on large codebases"
+      ],
+      "Fixed": [
+        "Comments inside JSON blocks now parse correctly",
+        "Renaming a file or block now triggers the update references dialog to keep all links in sync",
+        "Git clone now shows a progress indicator during the clone operation",
+        "Git panel no longer incorrectly refreshes on project change, window close, and similar events — it now reflects the correct repository state"
+      ]
+    }
+  },
+  {
+    "version": "v1.4.2-beta.1",
+    "date": "25/03/2026",
+    "title": "Panel Layouts & Open With",
+    "description": "Beta release adding a bottom panel layout for the response viewer, OS-level \"Open with Voiden\" support, and fixes for file upload in FormData/Binary bodies and random filenames on download.",
+    "icon": "PanelBottom",
+    "iconColor": "text-sky-400",
+    "bgColor": "bg-gradient-to-br from-sky-900 to-blue-900",
+    "changes": {
+      "Added": [
+        "Bottom panel layout for response viewer — move the response panel below the editor via the panel toggle button; the right panel now spans the full editor height while the bottom panel shares space with the terminal",
+        "Open with Voiden — open .void, .json, .yaml, and other supported file types directly in Voiden via the OS \"Open with\" dialog"
+      ],
+      "Fixed": [
+        "Files could not be attached and sent in FormData or Binary request bodies",
+        "Downloads now use the filename from the server's Content-Disposition header instead of a random UUID",
+        "Inline file references mixed with other text no longer add extra spacing after switching tabs"
+      ]
+    }
+  },
+  {
+    "version": "v1.4.1-beta.1",
+    "date": "23/03/2026",
+    "title": "Stitch — Workflow Runner",
+    "description": "Beta release introducing Stitch, a dedicated workflow runner for batch-executing multiple .void files sequentially with aggregated assertion results, a separate response panel, and full execution control.",
+    "icon": "Workflow",
+    "iconColor": "text-emerald-400",
+    "bgColor": "bg-gradient-to-br from-emerald-900 to-teal-900",
+    "changes": {
+      "Added": [
+        "Stitch — workflow runner for batch-executing multiple .void files sequentially via the /stitch slash command",
+        "Glob pattern include/exclude — configure which .void files to run using glob patterns",
+        "Stop-on-failure — optionally halt the run on the first file or assertion failure",
+        "Variable isolation — each file can run with a clean variable scope or share state across the run",
+        "Configurable delay between files — add a pause between sequential executions",
+        "Environment selector — choose which environment to use for the stitch run"
+      ]
+    }
+  },
+  {
+    "version": "v1.4.0-beta.1",
+    "date": "23/03/2026",
+    "title": "Multi-Request, Streaming UI & Unified Search",
+    "description": "Beta release introducing multi-request support with section-scoped execution, a redesigned streaming response panel for WebSocket and gRPC, unified cross-panel search, block import tracking, table autocomplete, and a range of editor and UX improvements.",
+    "icon": "Sparkles",
+    "iconColor": "text-violet-400",
+    "bgColor": "bg-gradient-to-br from-violet-900 to-indigo-900",
+    "changes": {
+      "Added": [
+        "Request separators — multiple requests can now coexist in a single .void file, separated by visual dividers with color-coded left borders",
+        "Color-coded sections — each request section gets a unique color indicator, carried through to the response panel for easy visual mapping",
+        "Section-scoped execution — Cmd+Enter sends only the request your cursor is in; sections are fully isolated (headers, body, auth scoped per section)",
+        "Run All — Cmd+Shift+Enter executes all sections in a file sequentially",
+        "Stacked response panel — responses from multiple sections stack with section color indicators and auto-expand",
+        "cURL paste — pasting a cURL/websocat/grpcurl command into a file with existing content now appends as a new section instead of replacing",
+        "GraphQL multi-request — GraphQL requests now support the same multi-request separator infrastructure, including section-scoped response handling",
+        "Unified streaming UI — WebSocket and gRPC message viewers now share common components (StreamMessageRow, StreamEventRow, StreamHeader) for consistent rendering",
+        "Collapsible stream header — single header bar with protocol label, message stats, connection status, and all actions (Pause/Disconnect/Export)",
+        "Compact stream input — message input is now a single toolbar row at the bottom with format selector, code editor, and Send button",
+        "Cmd+Enter to send — pressing Cmd+Enter in the streaming input area sends the message",
+        "Multi-request for sockets — WebSocket and gRPC slash commands are no longer singleton; multiple socket requests per file with separator support",
+        "Cross-panel search — Cmd+F search now works across both the Voiden editor and the response panel simultaneously",
+        "CodeMirror highlight sync — search matches are highlighted inside embedded CodeMirror editors (response body, headers, code blocks)",
+        "Imported block detection — imported/linked blocks are detected by position, enabling proper section scoping for linked content",
+        "External file sync indicator — new SourceSyncIndicator component shows when imported blocks are out of sync with their source file",
+        "Import dependency store — centralized tracking of import dependencies across .void files",
+        "Drag menu improvements — enhanced block drag menu with import/link capabilities",
+        "Table cell autocomplete — headers and query parameter table cells now show autocomplete suggestions (e.g. common header names, content types)",
+        "Request options block — new /options slash command for configuring per-request settings (timeout, follow redirects, etc.)",
+        "Auto-generated block names — request blocks automatically generate descriptive names based on method and URL",
+        "Response panel auto-expand — response panel automatically expands when a new response arrives"
+      ],
+      "Improved": [
+        "Document-native streaming layout — removed fixed-height container and footer bar; streaming responses now flow naturally with collapsible headers",
+        "Theme-aware stream content blocks — message content uses --ui-surface with theme border for proper contrast across all themes",
+        "Settings screen redesign — cleaned up layout with improved section organization",
+        "Separator styling — theme-aware separator colors with light theme support via --separator-color"
+      ],
+      "Fixed": [
+        "Singleton block scoping — slash commands like /headers are now properly scoped per section, not per document",
+        "Focus jumping between request editor and response panel when sending requests",
+        "Terminal component styling cleaned up to match the active theme"
+      ]
+    }
+  },
+  {
     "version": "v1.3.5",
     "date": "19/03/2026",
     "title": "History, Scripts, AI Skills & Fixes",

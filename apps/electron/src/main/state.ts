@@ -1,4 +1,5 @@
 import fs from "fs/promises";
+import fsSync from "fs";
 import {
   AppSettings,
   AppState,
@@ -19,6 +20,8 @@ import {
   loadAutosaveFile,
   deleteAutosaveFile,
   cleanupAutosaveFiles,
+  saveOnboardingState,
+  loadOnboardingState,
 } from "./persistState";
 import { renameFileOrDirectory, findVoidenProjects } from "./fileSystem";
 import { killTerminal } from "./terminal";
@@ -29,6 +32,7 @@ import { updateFileWatcher } from "./fileWatcher";
 import { windowManager } from "./windowManager";
 import { getSettings } from "./settings";
 import { recomposeAndInstall } from "./skillsInstaller";
+import { logger } from "./logger";
 
 function maybeRecomposeSkills(state: AppState): void {
   const skills = getSettings().skills;
@@ -53,7 +57,15 @@ export const updateWindowState = () => {
 export const initializeState = async (
   skipDefault?: boolean,
 ): Promise<AppState> => {
+  const startupTimer = Date.now();
+  logger.info('system', 'STARTUP [1/5] initializeState begin', { skipDefault });
+
+  const t0 = Date.now();
   appState = await loadState(skipDefault);
+  logger.perf('system', 'STARTUP [1/5] loadState complete', Date.now() - t0, {
+    activeDirectory: appState.activeDirectory,
+    dirCount: Object.keys(appState.directories || {}).length,
+  });
 
   appSettings = await loadSettings();
 
@@ -72,19 +84,29 @@ export const initializeState = async (
   }
 
   // Initialize extension manager after the state is loaded.
+  const t1 = Date.now();
   extensionManager = new ExtensionManager(appState);
   await extensionManager.loadInstalledCommunityExtensions();
+  logger.perf('system', 'STARTUP [2/5] loadInstalledCommunityExtensions complete', Date.now() - t1);
 
   // Save state after syncing extensions to persist any new core extensions
+  const t2 = Date.now();
   await saveState(appState);
+  logger.perf('system', 'STARTUP [3/5] saveState complete', Date.now() - t2);
 
-  // Initialize file watcher if an active project exists in state.
+  // Initialize file watcher in the background — do NOT await it.
+  // The watcher does not need to be ready before the window opens, and on large
+  // projects chokidar's setup can flood the event loop with EMFILE errors before
+  // any window is created, making the app appear stuck at launch.
   if (appState.activeDirectory) {
-    // console.debug("Initializing file watcher for active project:", appState.activeDirectory);
-    await updateFileWatcher(
-      appState.activeDirectory,
-      windowManager.activeWindowId as string,
-    );
+    const _watchPath = appState.activeDirectory;
+    const _watcherId = windowManager.activeWindowId as string;
+    logger.info('system', 'STARTUP [4/5] updateFileWatcher scheduled (non-blocking)', { path: _watchPath });
+    setImmediate(() => {
+      updateFileWatcher(_watchPath, _watcherId).catch((err) => {
+        logger.warn('system', 'FileWatcher: init error', { error: err?.message, path: _watchPath });
+      });
+    });
   }
 
   // Collect all tab IDs from the state for cleanup
@@ -115,6 +137,10 @@ export const initializeState = async (
 
   // Clean up autosaved files that are no longer referenced
   await cleanupAutosaveFiles(activeTabIds);
+
+  logger.perf('system', 'STARTUP [5/5] initializeState complete', Date.now() - startupTimer, {
+    activeDirectory: appState.activeDirectory,
+  });
 
   return appState;
 };
@@ -453,10 +479,11 @@ export async function setActiveProject(projectPath: string) {
 
   await saveState(appState);
 
-  // Update the file watcher:
-  // If projectPath is an empty string or null, the watcher will be closed.
-
-  await updateFileWatcher(projectPath || null);
+  // Update the file watcher using the active window ID as the key so it
+  // matches the key used by initializeState — preventing a second watcher
+  // from being created for the same directory with a different key.
+  const watcherId = windowManager.activeWindowId ?? undefined;
+  await updateFileWatcher(projectPath || "", watcherId);
 
   return { activeProject: projectPath };
 }
@@ -465,9 +492,8 @@ export async function emptyActiveProject() {
   const appState = getAppState();
   appState.activeDirectory = "";
   await saveState(appState);
-  // Update the file watcher:
-  // If projectPath is an empty string or null, the watcher will be closed.
-  await updateFileWatcher("");
+  const watcherId = windowManager.activeWindowId ?? undefined;
+  await updateFileWatcher("", watcherId);
   return { activeProject: null };
 }
 
@@ -673,6 +699,8 @@ export const ipcStateHandlers = () => {
         return { type: "welcome", tabId, title };
       case "changelog":
         return { type: "changelog", tabId, title };
+      case "logs":
+        return { type: "logs", tabId, title };
       case "document": {
         if (!source) {
           // Try to load autosaved content for unsaved files
@@ -878,18 +906,28 @@ export const ipcStateHandlers = () => {
       // Get the new path from the filesystem operation.
       const newPath = result.data.path;
 
+      // Check if renamed item is a directory
+      const isDirectory = fsSync.statSync(newPath).isDirectory();
+
       // Get the current application state.
       const appState = getAppState(event);
 
       // Define a helper to recursively update tabs in a layout.
+      // Handles both direct file renames and folder renames (which should update all files under the folder).
       const updateTabsInLayout = (layout: PanelElement) => {
         if (layout.type === "panel") {
           layout.tabs.forEach((tab) => {
-            // If the tab's source matches the old path,
-            // update it to the new path and update its title.
+            if (!tab.source) return;
+            
+            // For direct file/folder rename: exact match
             if (tab.source === oldPath) {
               tab.source = newPath;
               tab.title = newName;
+            }
+            // For folder rename: update all files under the folder
+            else if (isDirectory && tab.source.startsWith(oldPath + path.sep)) {
+              const relativePath = tab.source.slice(oldPath.length);
+              tab.source = newPath + relativePath;
             }
           });
         } else if (layout.type === "group") {
@@ -960,7 +998,17 @@ export const ipcStateHandlers = () => {
 
   // Toggle history-related sidebar tabs (left: globalHistory, right: history) based on setting
   ipcMain.handle("sidebar:setHistoryEnabled", async (_event, enabled: boolean) => {
-    const appState = getAppState();
+    // Guard against the startup race: this handler is invoked by the renderer's
+    // useHistoryTabSync effect on mount, which can fire before initializeState()
+    // registers the window state.  Return early instead of throwing so the UI
+    // doesn't surface an unhandled-rejection error; the renderer re-applies the
+    // setting whenever userSettings.onChange fires.
+    let appState: ReturnType<typeof getAppState>;
+    try {
+      appState = getAppState();
+    } catch {
+      return { success: false };
+    }
 
     if (enabled) {
       // Add globalHistory to left if missing
@@ -1008,24 +1056,66 @@ export const ipcStateHandlers = () => {
       }
     }
 
+    const normalizeProjectPath = (projectPath: string) => {
+      let normalized = path.resolve(projectPath);
+      normalized = normalized.replace(/[\\/]+$/, "");
+      if (process.platform === "win32") {
+        normalized = normalized.toLowerCase();
+      }
+      return normalized;
+    };
+
     // Aggregate directories from all open windows so that projects opened
     // in other windows also appear in the Recent Projects list.
-    const allDirectories: Record<string, any> = {};
+    const mergedEntries: Array<{ norm: string; projectPath: string; state: any }> = [];
+    const upsertEntry = (projectPath: string, state: any, prefer: boolean) => {
+      const norm = normalizeProjectPath(projectPath);
+      const existingIndex = mergedEntries.findIndex((entry) => entry.norm === norm);
+      if (existingIndex === -1) {
+        mergedEntries.push({ norm, projectPath, state });
+      } else if (prefer) {
+        mergedEntries[existingIndex] = { norm, projectPath, state };
+      }
+    };
+
     for (const winState of windowManager.getAllWindows()) {
       if (winState) {
         for (const [projectPath, layoutState] of Object.entries(winState.directories)) {
-          if (!allDirectories[projectPath]) {
-            allDirectories[projectPath] = layoutState;
-          }
+          upsertEntry(projectPath, layoutState, false);
         }
       }
     }
     // Current window's state takes precedence (e.g. hidden flag set in this window)
-    const mergedDirectories = { ...allDirectories, ...appState.directories };
+    for (const [projectPath, layoutState] of Object.entries(appState.directories)) {
+      upsertEntry(projectPath, layoutState, true);
+    }
 
-    const filterDirectories = Object.fromEntries(Object.entries(mergedDirectories).filter(([key, el]) => !el.hidden));
+    const projects: string[] = [];
+    let stateChanged = false;
+    for (const entry of mergedEntries) {
+      if (entry.state?.hidden) continue;
+      try {
+        const stat = await fs.stat(entry.projectPath);
+        if (!stat.isDirectory()) {
+          throw new Error("not a directory");
+        }
+        projects.push(entry.projectPath);
+      } catch {
+        if (appState.directories[entry.projectPath]) {
+          delete appState.directories[entry.projectPath];
+          stateChanged = true;
+        }
+        if (appState.activeDirectory === entry.projectPath) {
+          appState.activeDirectory = "";
+          stateChanged = true;
+        }
+      }
+    }
 
-    const projects = Object.keys(filterDirectories);
+    if (stateChanged) {
+      await saveState(appState);
+    }
+
     const activeProject = appState.activeDirectory;
     return {
       projects,
@@ -1039,6 +1129,10 @@ export const ipcStateHandlers = () => {
 
   // New IPC endpoints using the extension manager:
   ipcMain.handle("extensions:getAll", async () => {
+    // Guard against the startup race: extensionManager is set inside
+    // initializeState() which is async. Return an empty array if called
+    // before initialization completes; the renderer will retry.
+    if (!extensionManager) return [];
     const localExtensions = await extensionManager.getAllExtensions();
     const remoteExtensions = await getRemoteExtensions();
     const mergedExtensions = localExtensions.map((ext) => {
@@ -1162,6 +1256,13 @@ export const ipcStateHandlers = () => {
         return;
       }
       await setActiveProject(projectPath);
+
+      // Notify the renderer that the active project changed so it invalidates
+      // its query cache (files:tree, git:status, app:state, etc.) immediately.
+      // Without this the renderer keeps using the old activeDirectory until its
+      // 30-second refetchInterval fires, causing stale git/file-tree checks.
+      const win = BrowserWindow.fromWebContents(event.sender);
+      win?.webContents.send("folder:opened", { path: projectPath });
     },
   );
 
@@ -1184,14 +1285,17 @@ export const ipcStateHandlers = () => {
     },
   );
 
+  ipcMain.handle("state:getOnboarding", async () => {
+    return loadOnboardingState();
+  });
+
   ipcMain.handle("state:updateOnboarding", async (event, onboarding) => {
     try {
-      const state = await getAppState();
+      await saveOnboardingState(onboarding);
+      const state = getAppState(event);
       state.onboarding = onboarding;
-      await saveState(state);
       return state;
     } catch (error) {
-      // console.error("Error updating onboarding:", error);
       throw error;
     }
   });
@@ -1532,6 +1636,12 @@ export const ipcStateHandlers = () => {
       if (!added)
         throw new Error(`Failed to duplicate tab in panel ${panelId}`);
       await saveState(appState);
+      if (newSource) {
+        _event.sender.send("file:duplicate", {
+          path: newSource,
+          name: newTitle,
+        });
+      }
       return { panelId, tabId: newTab.id };
     },
   );

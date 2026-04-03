@@ -10,9 +10,12 @@ import WelcomeScreen from "@/core/screens/WelcomeScreen";
 import SettingsScreen from "@/core/screens/SettingsScreen";
 import logo from "@/assets/logo-dark.png";
 import ChangeLogScreen from "@/core/screens/ChangeLogScreen";
+import { LogsPanel } from "@/core/request-engine/components/LogsPanel";
 import { useCodeEditorStore } from "@/core/editors/code/CodeEditorStore";
 import { useEditorStore } from "@/core/editors/voiden/VoidenEditor";
-import { Settings, Menu, Play } from "lucide-react";
+import { Settings, Menu, Play, PlayCircle } from "lucide-react";
+import { useSendRequest } from "@/core/request-engine";
+import { useVoidenEditorStore } from "@/core/editors/voiden/VoidenEditor";
 import { Kbd } from "@/core/components/ui/kbd";
 import { ErrorBoundary } from "@/core/components/ErrorBoundary";
 import { DiffViewer } from "@/core/git/components/DiffViewer";
@@ -21,6 +24,31 @@ import { EnvironmentEditor } from "@/core/environment/components/EnvironmentEdit
 import { useNewTerminalTab } from "@/core/terminal/hooks/useTerminal";
 import { usePanelStore } from "@/core/stores/panelStore";
 import { Tip } from "@/core/components/ui/Tip";
+import { useSettings } from "@/core/settings/hooks";
+
+// Extensions that cannot be displayed as text — show a "not supported" message
+const BINARY_EXTENSIONS = new Set([
+  "zip", "rar", "tar", "gz", "bz2", "7z", "xz", "tgz",
+  "exe", "dll", "so", "dylib", "app", "dmg", "pkg", "deb", "rpm", "msi", "apk",
+  "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "tiff", "tif", "psd", "heic", "avif",
+  "mp3", "mp4", "mov", "avi", "mkv", "wav", "flac", "ogg", "webm", "m4a", "m4v",
+  "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+  "class", "pyc", "o", "a", "lib",
+  "woff", "woff2", "ttf", "otf", "eot",
+  "db", "sqlite", "sqlite3",
+]);
+
+function isBinaryFile(name: string): boolean {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  return BINARY_EXTENSIONS.has(ext);
+}
+
+const UnsupportedFile = ({ title }: { title: string }) => (
+  <div className="flex flex-col items-center justify-center h-full gap-2 text-comment select-none">
+    <span className="text-sm font-medium">{title}</span>
+    <span className="text-xs">This file type cannot be opened in the editor.</span>
+  </div>
+);
 
 // TypeScript interface for md-preview plugin helpers
 interface MdPreviewHelpers {
@@ -70,6 +98,35 @@ const RunScriptButton = ({ source }: { source: string }) => {
         <Play size={14} className="text-comment hover:text-fg" />
       </button>
     </Tip>
+  );
+};
+
+// "Run All" button — only visible when document has multiple request sections
+const RunAllButton = () => {
+  const editor = useVoidenEditorStore((state) => state.editor);
+  // @ts-ignore
+  const { runAll, isFetching, cancelRequest } = useSendRequest(editor);
+
+  if (!editor) return null;
+
+  // Check if document has multiple sections
+  let hasMultipleSections = false;
+  editor.state.doc.forEach((child: any) => {
+    if (child.type.name === "request-separator") hasMultipleSections = true;
+  });
+
+  if (!hasMultipleSections) return null;
+
+  return (
+    <button
+      onClick={() => isFetching ? cancelRequest() : runAll()}
+      className="flex items-center gap-1 px-2 py-1 rounded hover:bg-active transition-colors text-xs"
+      title="Run all requests (⌘⇧↵)"
+      style={{ color: 'var(--icon-success)' }}
+    >
+      <PlayCircle size={14} />
+      <span className="font-medium">Run All</span>
+    </button>
   );
 };
 
@@ -311,6 +368,7 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
   const panel = usePluginStore((state) => state.panels[panelId]);
   const { data: tabs } = useGetPanelTabs(panelId);
   const editorActions = usePluginStore((state) => state.editorActions);
+  const { settings } = useSettings();
   const activeEditor = useCodeEditorStore((state) => state.activeEditor);
 
   // Subscribe to unsaved Voiden editor content for the active tab so predicates
@@ -447,7 +505,10 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
               <RunScriptButton source={activeDocTabContent.source} />
             )}
             {activeDocTabContent?.title.endsWith(".void") ? (
-              <ActionMenu actionsToDisplay={actionsToDisplay} tab={activeDocTabContent} />
+              <>
+                <RunAllButton />
+                <ActionMenu actionsToDisplay={actionsToDisplay} tab={activeDocTabContent} />
+              </>
             ) : (
               actionsToDisplay.map((action) => {
                 const ActionComponent = action.component;
@@ -461,7 +522,7 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
           </div>
         </div>
       </div>
-      <div className="flex-1 bg-editor" id="code-editor-container" data-editor-scroll-container="true">
+      <div className="flex-1 bg-editor relative" id="code-editor-container" data-editor-scroll-container="true">
         {activeDocTabContent?.title.endsWith(".md") && viewMode === "preview" && mdPreviewHelpers?.Preview ? (
           (() => {
             const PreviewComponent = mdPreviewHelpers.Preview;
@@ -470,11 +531,18 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
         ) : (
           visibleDocumentTabIds.map((docTabId: string) => {
             const docTab = visibleDocumentTabs[docTabId];
+            const isTabActive = docTab.tabId === activeDocTabContent?.tabId;
             return (
               <div
                 key={docTab.tabId}
-                className="h-full w-full"
-                style={{ display: docTab.tabId === activeDocTabContent?.tabId ? "block" : "none" }}
+                // Use visibility:hidden instead of display:none for inactive tabs.
+                // This keeps DOM nodes in the layout tree so switching back avoids
+                // a full layout recalculation for large files (10k+ nodes).
+                style={
+                  isTabActive
+                    ? { width: '100%', height: '100%' }
+                    : { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, visibility: 'hidden', pointerEvents: 'none', overflow: 'hidden' }
+                }
                 onContextMenu={(e) => {
                   if (docTab.tabId !== activeDocTabContent?.tabId) return;
                   e.preventDefault();
@@ -497,6 +565,8 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
                     hasSearch
                     isActive={docTab.tabId === activeDocTabContent?.tabId}
                   />
+                ) : isBinaryFile(docTab.source || docTab.title) ? (
+                  <UnsupportedFile title={docTab.title} />
                 ) : (
                   <CodeEditor
                     tabId={docTab.tabId}
@@ -539,6 +609,16 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
       }
     })
     return <>{cachedEditorsBlock}<ChangeLogScreen /></>;
+  }
+
+  if (tabContent.type === "logs") {
+    editorActions.forEach((action) => {
+      if (action && action.predicate) {
+        action.predicate({ title: '' });
+      }
+    })
+    if (!settings?.developer?.system_log) return <>{cachedEditorsBlock}</>;
+    return <>{cachedEditorsBlock}<LogsPanel /></>;
   }
 
   if (tabContent.type === "document") {

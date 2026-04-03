@@ -4,6 +4,7 @@ interface TreeNode {
   type: "file" | "folder";
   isDirty?: boolean;
   children?: TreeNode[];
+  lazy?: boolean;
 }
 
 export interface FolderNode extends TreeNode {

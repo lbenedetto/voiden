@@ -9,6 +9,8 @@ import { cn } from "@/core/lib/utils";
 import { icons } from "lucide-react";
 
 import { useEditorEnhancementStore } from "@/plugins";
+import { pickDistinctColorIndex } from "./extensions/sectionIndicator";
+import { getRandomRequestName, getUsedNamesFromDoc } from "./lib/requestNames";
 
 const GROUPS: Group[] = [
   {
@@ -107,6 +109,75 @@ const GROUPS: Group[] = [
         aliases: ["quote"],
         action: (editor) => {
           editor.chain().focus().toggleBlockquote().run();
+        },
+      },
+      {
+        name: "new-request",
+        label: "New Request",
+        iconName: "SeparatorHorizontal",
+        aliases: ["separator", "new"],
+        slash: "/new-request",
+        singleton: false,
+        description: "Start a new request section",
+        action: (editor) => {
+          const { from, to } = editor.state.selection;
+
+          // Check if this is the first separator being added
+          let hasSeparators = false;
+          let prevColorIndex = -1;
+          let nextColorIndex = -1;
+          const cursorPos = from;
+          let foundPrev = false;
+
+          editor.state.doc.forEach((child: any, offset: number) => {
+            if (child.type.name === "request-separator") {
+              hasSeparators = true;
+              const ci = typeof child.attrs.colorIndex === "number" ? child.attrs.colorIndex : 0;
+              if (offset < cursorPos) {
+                prevColorIndex = ci;
+              } else if (!foundPrev && offset >= cursorPos) {
+                nextColorIndex = ci;
+                foundPrev = true;
+              }
+            }
+          });
+
+          const colorIndex = pickDistinctColorIndex(prevColorIndex, nextColorIndex);
+          const usedNames = getUsedNamesFromDoc(editor);
+
+          if (!hasSeparators) {
+            // First separator being added — also add one for the existing first section
+            const firstSectionColorIndex = pickDistinctColorIndex(-1, colorIndex);
+            const firstName = getRandomRequestName(usedNames);
+            const secondName = getRandomRequestName([...usedNames, firstName]);
+
+            editor.chain().focus()
+              .command(({ dispatch, tr, state }) => {
+                if (dispatch) {
+                  // Insert separator for the first section at position 0
+                  const firstSep = state.schema.nodes['request-separator'].create({
+                    colorIndex: firstSectionColorIndex,
+                    label: firstName,
+                  });
+                  tr.insert(0, firstSep);
+                }
+                return true;
+              })
+              // Now delete the selected range and insert the new separator
+              // Positions shifted by the inserted first separator's size
+              .deleteRange({ from: from + 2, to: to + 2 })
+              .insertContent([
+                { type: "request-separator", attrs: { colorIndex, label: secondName } },
+                { type: "paragraph" },
+              ])
+              .run();
+          } else {
+            const newName = getRandomRequestName(usedNames);
+            editor.chain().focus().deleteRange({ from, to }).insertContent([
+              { type: "request-separator", attrs: { colorIndex, label: newName } },
+              { type: "paragraph" },
+            ]).run();
+          }
         },
       },
       {
@@ -457,15 +528,37 @@ export const SlashCommand = Extension.create({
             return false;
           });
 
-          const editorJSON = this.editor.getJSON();
+          // Section-scoped singleton check: only check nodes in the current section
+          // (between request-separator nodes), not the entire document
+          const doc = this.editor.state.doc;
+          const cursorPos = this.editor.state.selection.$from.pos;
+
+          // Split doc children into sections at request-separator boundaries
+          let currentSectionIndex = 0;
+          const sectionNodes: { type: string }[][] = [[]];
+          doc.forEach((child, offset) => {
+            const nodeStart = offset + 1;
+            const nodeEnd = nodeStart + child.nodeSize;
+            if (child.type.name === "request-separator") {
+              if (cursorPos >= nodeEnd) {
+                currentSectionIndex++;
+              }
+              sectionNodes.push([]);
+            } else {
+              sectionNodes[sectionNodes.length - 1].push({ type: child.type.name });
+            }
+          });
+
+          const nodesInSection = sectionNodes[currentSectionIndex] || [];
+          console.log('[SlashCommand] cursorPos:', cursorPos, 'sectionIndex:', currentSectionIndex, 'sectionCount:', sectionNodes.length, 'nodesInSection:', nodesInSection.map(n => n.type));
+
           function shouldBeEnabled(command: Command) {
-            if (!editorJSON.content|| !command.singleton) return true;
-            for (const node of editorJSON.content) {
-              if(command.compareKeys?.includes(node.type||"")){
+            if (!command.singleton) return true;
+            for (const node of nodesInSection) {
+              if (command.compareKeys?.includes(node.type || "")) {
                 return false;
               }
             }
-
             return true;
           }
 

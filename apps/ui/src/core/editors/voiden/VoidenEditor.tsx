@@ -1,12 +1,18 @@
 import { useCallback, useMemo, useState, useEffect, useRef, useLayoutEffect, memo } from "react";
 import { AnyExtension, Editor, EditorContent, Extension, getSchema, useEditor } from "@tiptap/react";
-import { Plugin, PluginKey } from "prosemirror-state";
+import { Plugin, PluginKey, TextSelection } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 import { useVoidVariableData } from "@/core/runtimeVariables/hook/useVariableCapture.tsx";
-// Escape user input for literal searches
-function escapeRegExp(str: string) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+import {
+  buildUnifiedMatches,
+  escapeRegExp,
+  getPmMatches,
+  getCmMatchesByNode,
+  type UnifiedMatch,
+} from "@/core/editors/voiden/search/unifiedSearch";
+import { unifiedSearchHighlight } from "@/core/editors/voiden/search/cmHighlightEffect";
+import { findCmViewAtPos, findAllCmViews } from "@/core/editors/voiden/search/cmViewLookup";
+import { SectionIndicatorExtension } from "./extensions/sectionIndicator";
 // Plugin to highlight all findTerm matches, with special highlight for current match
 const findHighlightPluginKey = new PluginKey("findHighlight");
 const findHighlightPlugin = new Plugin({
@@ -125,7 +131,7 @@ import { variableHighlighter, updateVariableData, updateVariableKeys } from "./e
 import { useSearchStore } from "@/core/stores/searchParamsStore";
 import { usePanelStore } from "@/core/stores/panelStore";
 import { useGetActiveDocument } from "@/core/documents/hooks";
-import {useVoidVariables} from "@/core/runtimeVariables/hook/useVariableCapture";
+import { useVoidVariables } from "@/core/runtimeVariables/hook/useVariableCapture";
 import { useQueryClient } from "@tanstack/react-query";
 
 interface VoidenEditorStore {
@@ -334,6 +340,8 @@ const VoidenEditorInner = ({
 }) => {
 
   const editorRef = useRef<HTMLDivElement | null>(null);
+  const updateTimerRef = useRef<number | null>(null);
+  const autoSaveTimerRef = useRef<number | null>(null);
   const setUnsaved = useEditorStore((state) => state.setUnsaved);
   const clearUnsaved = useEditorStore((state) => state.clearUnsaved);
   const setScrollPosition = useEditorStore((state) => state.setScrollPosition);
@@ -362,6 +370,12 @@ const VoidenEditorInner = ({
 
   const initialUnsaved = useEditorStore.getState().unsaved[tabId];
 
+  // Files over this size are parsed & mounted asynchronously so the main thread
+  // is never blocked long enough to crash/freeze the app.
+  const LARGE_FILE_THRESHOLD = 20_000; // 20 KB of raw markdown
+  const isLargeContent = !initialUnsaved && content.length > LARGE_FILE_THRESHOLD;
+  const [isLoadingContent, setIsLoadingContent] = useState(isLargeContent);
+
   useEffect(() => {
     if (!isActive) return;
     // Always update the store with the new content, or an empty string if undefined.
@@ -372,7 +386,7 @@ const VoidenEditorInner = ({
   const [showFind, setShowFind] = useState(false);
   const [findTerm, setFindTerm] = useState("");
   const [replaceTerm, setReplaceTerm] = useState("");
-  const [matchPositions, setMatchPositions] = useState<{ from: number; to: number }[]>([]);
+  const [matchPositions, setMatchPositions] = useState<UnifiedMatch[]>([]);
   const [currentMatch, setCurrentMatch] = useState(-1);
   const findInputRef = useRef<HTMLInputElement>(null);
   const [matchCase, setMatchCase] = useState(false);
@@ -383,6 +397,7 @@ const VoidenEditorInner = ({
   // Sync search state to global store
   const setGlobalTerm = useSearchStore((state) => state.setTerm);
   const setGlobalMatchCase = useSearchStore((state) => state.setMatchCase);
+  const setUnifiedSearchActive = useSearchStore((state) => state.setUnifiedSearchActive);
   useEffect(() => {
     setGlobalTerm(findTerm);
   }, [findTerm]);
@@ -406,9 +421,10 @@ const VoidenEditorInner = ({
     if (!isActive) return;
 
     const handleShortcut = (e: KeyboardEvent) => {
-      // Don't trigger if focus is in a CodeMirror editor (it has its own search)
+      // Allow unified search shortcuts even in CodeMirror editors
+      // (but skip for standalone code file editors outside VoidenEditor)
       const target = e.target as HTMLElement;
-      if (target?.closest('.cm-editor, .txt-editor')) {
+      if (target?.closest('.txt-editor')) {
         return;
       }
 
@@ -420,6 +436,7 @@ const VoidenEditorInner = ({
         e.preventDefault();
         setShowFind(true);
         setShowReplaceSection(false);
+        setUnifiedSearchActive(true);
         return;
       }
 
@@ -428,21 +445,16 @@ const VoidenEditorInner = ({
         e.preventDefault();
         setShowFind(true);
         setShowReplaceSection(true);
+        setUnifiedSearchActive(true);
         return;
       }
 
       // Cmd/Ctrl+G: Find next (only when find panel is open)
       if (mod && key === "g" && showFind && !e.shiftKey) {
         e.preventDefault();
-        const currentEditor = useVoidenEditorStore.getState().editor;
-        if (matchPositions.length > 0 && currentEditor) {
+        if (matchPositions.length > 0) {
           const nextIndex = (currentMatch + 1) % matchPositions.length;
-          const { from, to } = matchPositions[nextIndex];
-          currentEditor.commands.setTextSelection({ from, to });
-          currentEditor.commands.focus();
-          setCurrentMatch(nextIndex);
-          const meta = { term: findTerm, matchCase, matchWholeWord, useRegex, currentMatch: nextIndex };
-          currentEditor.view.dispatch(currentEditor.state.tr.setMeta(findHighlightPluginKey, meta));
+          navigateToMatch(nextIndex, false);
         }
         return;
       }
@@ -450,15 +462,9 @@ const VoidenEditorInner = ({
       // Shift+Cmd/Ctrl+G: Find previous (only when find panel is open)
       if (mod && key === "g" && showFind && e.shiftKey) {
         e.preventDefault();
-        const currentEditor = useVoidenEditorStore.getState().editor;
-        if (matchPositions.length > 0 && currentEditor) {
+        if (matchPositions.length > 0) {
           const prevIndex = (currentMatch - 1 + matchPositions.length) % matchPositions.length;
-          const { from, to } = matchPositions[prevIndex];
-          currentEditor.commands.setTextSelection({ from, to });
-          currentEditor.commands.focus();
-          setCurrentMatch(prevIndex);
-          const meta = { term: findTerm, matchCase, matchWholeWord, useRegex, currentMatch: prevIndex };
-          currentEditor.view.dispatch(currentEditor.state.tr.setMeta(findHighlightPluginKey, meta));
+          navigateToMatch(prevIndex, false);
         }
         return;
       }
@@ -479,6 +485,8 @@ const VoidenEditorInner = ({
         setShowReplaceSection(false);
         setFindTerm(""); // Clear search term
         setReplaceTerm(""); // Clear replace term
+        setUnifiedSearchActive(false);
+        clearCmHighlights();
       }
     };
     window.addEventListener("keydown", handleEscape);
@@ -528,8 +536,8 @@ const VoidenEditorInner = ({
   }, [showFind, findTerm]);
 
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function sanitizeDoc(node: any): any {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function sanitizeDoc(node: any): any {
     if (!node || typeof node !== "object") return node;
 
     // Fix invalid paragraph content set as number
@@ -546,7 +554,7 @@ function sanitizeDoc(node: any): any {
     }
 
     // Remove invalid text nodes
-    if (node.type === "text" && (!node.text || (typeof node.text==='string' && node.text.trim() === "") )) {
+    if (node.type === "text" && (!node.text || (typeof node.text === 'string' && node.text.trim() === ""))) {
       return null;
     }
 
@@ -566,26 +574,39 @@ function sanitizeDoc(node: any): any {
   const validateAndParseContent = useCallback(
     (content: string, unsavedContent: string | undefined) => {
       // If there is no unsaved content and the provided content is empty, return empty doc
+      // with a separator so new files start with a consistent section header
       if (!unsavedContent && content.trim() === "") {
-        return { type: "doc", content: [] };
+        return {
+          type: "doc",
+          content: [
+            { type: "request-separator", attrs: { colorIndex: 0, label: "New Request" } },
+            { type: "paragraph" },
+          ],
+        };
+      }
+
+      // Large files are loaded asynchronously in handleEditorCreate.
+      // Return a minimal placeholder so TipTap mounts immediately without blocking.
+      if (!unsavedContent && content.length > LARGE_FILE_THRESHOLD) {
+        return { type: "doc", content: [{ type: "paragraph" }] };
       }
 
       try {
         const parsed = unsavedContent ? JSON.parse(unsavedContent) : parseMarkdown(content, memoizedSchema);
         // Validate the parsed content
         try {
-            const cleaned = sanitizeDoc(parsed); // 🧼 clean it
+          const cleaned = sanitizeDoc(parsed); // 🧼 clean it
 
-            // CRITICAL: Preserve unknown nodes before validation
-            // This wraps data from disabled plugins so it's not lost
-            const preserved = preserveUnknownNodesInJSON(cleaned, memoizedSchema);
+          // CRITICAL: Preserve unknown nodes before validation
+          // This wraps data from disabled plugins so it's not lost
+          const preserved = preserveUnknownNodesInJSON(cleaned, memoizedSchema);
 
-            memoizedSchema.nodeFromJSON(preserved);
-            return preserved;
-          } catch (e) {
-            // Instead of crashing, return a safe fallback document
-            return { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: content }] }] };
-          }
+          memoizedSchema.nodeFromJSON(preserved);
+          return preserved;
+        } catch (e) {
+          // Instead of crashing, return a safe fallback document
+          return { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: content }] }] };
+        }
       } catch (err) {
         // Instead of crashing, return a safe fallback document
         return { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: content }] }] };
@@ -601,6 +622,9 @@ function sanitizeDoc(node: any): any {
   // Updated whenever the `content` prop changes (e.g. after save + query re-fetch).
   const savedContentJSONRef = useRef<string | null>(null);
   useEffect(() => {
+    // Large files: skip the upfront parse here — handleEditorCreate populates
+    // savedContentJSONRef after the deferred setContent completes.
+    if (!initialUnsaved && content.length > LARGE_FILE_THRESHOLD) return;
     try {
       const parsed = parseMarkdown(content, memoizedSchema);
       const sanitized = sanitizeDoc(parsed);
@@ -618,71 +642,183 @@ function sanitizeDoc(node: any): any {
           useVoidenEditorStore.getState().setFilePath(source);
         }
 
-        // Set the editor in the store
         editor.storage.panelId = panelId;
         editor.storage.tabId = tabId;
+        editor.storage.source = source;
         editor.storage.instanceId = crypto.randomUUID();
 
         const unsaved = useEditorStore.getState().unsaved[tabId];
         const savedScrollTop = useEditorStore.getState().getScrollPosition(tabId);
-        
-        try {
-          const savedContent = parseMarkdown(content, memoizedSchema);
-          const santizedContent = sanitizeDoc(savedContent);
 
-          if (unsaved) {
-            const parsedUnsaved = JSON.parse(unsaved);
-            if (JSON.stringify(parsedUnsaved) !== JSON.stringify(savedContent)) {
-              editor.commands.setContent(parsedUnsaved, false);
+        const applyContent = (santizedContent: any) => {
+          if (editor.isDestroyed) return;
+          try {
+            if (unsaved) {
+              const parsedUnsaved = JSON.parse(unsaved);
+              if (JSON.stringify(parsedUnsaved) !== JSON.stringify(santizedContent)) {
+                editor.commands.setContent(parsedUnsaved, false);
+              }
+            } else {
+              editor.commands.setContent(santizedContent, false);
             }
-          } else {
-            editor.commands.setContent(santizedContent, false);
+          } catch {
+            const fallbackContent = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: content }] }] };
+            editor.commands.setContent(fallbackContent, false);
           }
-        } catch (parseError) {
-          // Set a safe fallback content instead of destroying the editor
-          const fallbackContent = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: content }] }] };
-          editor.commands.setContent(fallbackContent, false);
-        }
 
-        // For brand new files only: collapse selection to start.
-        // When restoring tab scroll, forcing selection can move viewport unexpectedly.
-        if (!unsaved && savedScrollTop === 0) {
-          requestAnimationFrame(() => {
-            if (!editor.isDestroyed) {
-              editor.commands.setTextSelection(1);
+          // Populate saved-content ref so unsaved detection works after load
+          try {
+            savedContentJSONRef.current = JSON.stringify(santizedContent);
+          } catch { /* ignore */ }
+
+          setIsLoadingContent(false);
+
+          // For brand new files only: collapse selection to start.
+          if (!unsaved && savedScrollTop === 0) {
+            requestAnimationFrame(() => {
+              if (!editor.isDestroyed) {
+                try {
+                  const $pos = editor.state.doc.resolve(1);
+                  if ($pos.parent.isTextblock) {
+                    editor.commands.setTextSelection(1);
+                  } else {
+                    let found = false;
+                    editor.state.doc.descendants((node, pos) => {
+                      if (!found && node.isTextblock) {
+                        editor.commands.setTextSelection(pos + 1);
+                        found = true;
+                        return false;
+                      }
+                    });
+                  }
+                } catch {
+                  // Silently ignore — cursor will be placed by autofocus
+                }
+              }
+            });
+          }
+        };
+
+        const doLoad = () => {
+          try {
+            const savedContent = parseMarkdown(content, memoizedSchema);
+            const santizedContent = sanitizeDoc(savedContent);
+            applyContent(santizedContent);
+          } catch {
+            const fallbackContent = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: content }] }] };
+            if (!editor.isDestroyed) editor.commands.setContent(fallbackContent, false);
+            setIsLoadingContent(false);
+          }
+        };
+
+        // For large files: parse once (pure JS, no DOM), then insert nodes in small
+        // batches per animation frame so the main thread never blocks long enough
+        // to freeze tab switching or other UI events.
+        const doLoadChunked = () => {
+          try {
+            const savedContent = parseMarkdown(content, memoizedSchema);
+            const santizedContent = sanitizeDoc(savedContent);
+            const allNodes: any[] = santizedContent?.content ?? [];
+            const CHUNK_SIZE = 150;
+
+            if (allNodes.length <= CHUNK_SIZE) {
+              applyContent(santizedContent);
+              return;
             }
-          });
+
+            // Mount the first chunk immediately so content appears right away.
+            if (!editor.isDestroyed) {
+              editor.commands.setContent({ type: "doc", content: allNodes.slice(0, CHUNK_SIZE) }, false);
+            }
+
+            let offset = CHUNK_SIZE;
+
+            const loadNextChunk = () => {
+              if (editor.isDestroyed) return;
+              const chunk = allNodes.slice(offset, offset + CHUNK_SIZE);
+              try {
+                const { state } = editor;
+                const pmNodes = chunk.map((n: any) => state.schema.nodeFromJSON(n));
+                const tr = state.tr.insert(state.doc.content.size, pmNodes);
+                editor.view.dispatch(tr);
+              } catch { /* skip malformed nodes in this chunk */ }
+              offset += CHUNK_SIZE;
+              if (offset < allNodes.length) {
+                requestAnimationFrame(loadNextChunk);
+              } else {
+                // All chunks inserted — finalise exactly like applyContent does.
+                try { savedContentJSONRef.current = JSON.stringify(santizedContent); } catch { /* ignore */ }
+                setIsLoadingContent(false);
+                if (!unsaved && savedScrollTop === 0) {
+                  requestAnimationFrame(() => {
+                    if (editor.isDestroyed) return;
+                    try {
+                      const $pos = editor.state.doc.resolve(1);
+                      if ($pos.parent.isTextblock) {
+                        editor.commands.setTextSelection(1);
+                      } else {
+                        let found = false;
+                        editor.state.doc.descendants((node, pos) => {
+                          if (!found && node.isTextblock) { editor.commands.setTextSelection(pos + 1); found = true; return false; }
+                        });
+                      }
+                    } catch { /* ignore */ }
+                  });
+                }
+              }
+            };
+
+            requestAnimationFrame(loadNextChunk);
+          } catch {
+            const fallbackContent = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: content }] }] };
+            if (!editor.isDestroyed) editor.commands.setContent(fallbackContent, false);
+            setIsLoadingContent(false);
+          }
+        };
+
+        if (!unsaved && content.length > LARGE_FILE_THRESHOLD) {
+          // Yield one tick so the placeholder editor paints before any work starts.
+          setTimeout(doLoadChunked, 0);
+        } else {
+          doLoad();
         }
 
       } catch (e) {
-        // Set a safe fallback content instead of destroying the editor
+        setIsLoadingContent(false);
         const fallbackContent = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: content }] }] };
-        editor.commands.setContent(fallbackContent, false);
+        if (!editor.isDestroyed) editor.commands.setContent(fallbackContent, false);
       }
-
     },
     [source, panelId, tabId, content, memoizedSchema, isActive],
   );
 
   const handleEditorUpdate = useCallback(
     ({ editor }: { editor: Editor }) => {
-      const updatedContent = editor.getJSON();
-      const contentString = JSON.stringify(updatedContent);
+      // Debounce the expensive serialization to avoid running on every keystroke
+      if (updateTimerRef.current !== null) clearTimeout(updateTimerRef.current);
+      updateTimerRef.current = window.setTimeout(() => {
+        updateTimerRef.current = null;
+        const updatedContent = editor.getJSON();
+        const contentString = JSON.stringify(updatedContent);
 
-      // Compare against saved content to detect when edits restore the original
-      if (savedContentJSONRef.current && contentString === savedContentJSONRef.current) {
-        clearUnsaved(tabId);
-      } else {
-        setUnsaved(tabId, contentString);
-      }
-
-      // Auto-save to AppData for unsaved files (source is null)
-      if (!source) {
-        // Debounce the auto-save to avoid excessive writes
-        if (window.electron?.autosave?.save) {
-          window.electron.autosave.save(tabId, contentString).catch(console.error);
+        // Compare against saved content to detect when edits restore the original
+        if (savedContentJSONRef.current && contentString === savedContentJSONRef.current) {
+          clearUnsaved(tabId);
+        } else {
+          setUnsaved(tabId, contentString);
         }
-      }
+
+        // Auto-save to AppData for unsaved files (source is null)
+        if (!source) {
+          if (autoSaveTimerRef.current !== null) clearTimeout(autoSaveTimerRef.current);
+          autoSaveTimerRef.current = window.setTimeout(() => {
+            autoSaveTimerRef.current = null;
+            if (window.electron?.autosave?.save) {
+              window.electron.autosave.save(tabId, contentString).catch(console.error);
+            }
+          }, 1000);
+        }
+      }, 300);
     },
     [setUnsaved, clearUnsaved, tabId, source],
   );
@@ -698,7 +834,7 @@ function sanitizeDoc(node: any): any {
       },
       onCreate: handleEditorCreate,
       onUpdate: handleEditorUpdate,
-      extensions: [...finalExtensions, FindHighlightExtension],
+      extensions: [...finalExtensions, FindHighlightExtension, SectionIndicatorExtension],
       immediatelyRender: true,
       shouldRerenderOnTransaction: false,
     },
@@ -720,6 +856,14 @@ function sanitizeDoc(node: any): any {
       }
     };
   }, [editor]);
+
+  // Clean up debounce timers on unmount
+  useEffect(() => {
+    return () => {
+      if (updateTimerRef.current !== null) clearTimeout(updateTimerRef.current);
+      if (autoSaveTimerRef.current !== null) clearTimeout(autoSaveTimerRef.current);
+    };
+  }, []);
 
   // Separate effect for environment changes - debounced to avoid conflicts during modal unmount
   const [debouncedActiveEnvKey, setDebouncedActiveEnvKey] = useState(activeEnvKey);
@@ -829,6 +973,7 @@ function sanitizeDoc(node: any): any {
     let currentTarget = getScrollPosition(tabId);
     let isUserScrolling = false;
     let userScrollTimeout: number | null = null;
+    let scrollSaveTimer: number | null = null;
 
     const setUserScrolling = () => {
       isUserScrolling = true;
@@ -848,7 +993,13 @@ function sanitizeDoc(node: any): any {
     const handleScroll = () => {
       if (isUserScrolling) {
         currentTarget = scrollContainer.scrollTop;
-        setScrollPosition(tabId, scrollContainer.scrollTop);
+        // Throttle Zustand writes to every 200ms
+        if (scrollSaveTimer === null) {
+          scrollSaveTimer = window.setTimeout(() => {
+            scrollSaveTimer = null;
+            setScrollPosition(tabId, currentTarget);
+          }, 200);
+        }
       } else {
         // Editor-internal scroll (ProseMirror, async effects) — snap back to user's target
         applySavedScroll(scrollContainer);
@@ -861,6 +1012,7 @@ function sanitizeDoc(node: any): any {
     scrollContainer.addEventListener('wheel', handleUserInteraction, { passive: true, capture: true });
     scrollContainer.addEventListener('touchmove', handleUserInteraction, { passive: true, capture: true });
     scrollContainer.addEventListener('keydown', handleUserInteraction, { capture: true });
+    scrollContainer.addEventListener('mousedown', handleUserInteraction, { capture: true });
 
     // Apply synchronously before the first paint so there is no visible jump.
     // useLayoutEffect runs after DOM mutations (display: block) but before paint.
@@ -873,7 +1025,9 @@ function sanitizeDoc(node: any): any {
       scrollContainer.removeEventListener('wheel', handleUserInteraction, { capture: true });
       scrollContainer.removeEventListener('touchmove', handleUserInteraction, { capture: true });
       scrollContainer.removeEventListener('keydown', handleUserInteraction, { capture: true });
+      scrollContainer.removeEventListener('mousedown', handleUserInteraction, { capture: true });
       if (userScrollTimeout !== null) clearTimeout(userScrollTimeout);
+      if (scrollSaveTimer !== null) clearTimeout(scrollSaveTimer);
       setScrollPosition(tabId, currentTarget);
     };
 
@@ -893,7 +1047,9 @@ function sanitizeDoc(node: any): any {
           scrollContainer.removeEventListener('wheel', handleUserInteraction, { capture: true });
           scrollContainer.removeEventListener('touchmove', handleUserInteraction, { capture: true });
           scrollContainer.removeEventListener('keydown', handleUserInteraction, { capture: true });
+          scrollContainer.removeEventListener('mousedown', handleUserInteraction, { capture: true });
           if (userScrollTimeout !== null) clearTimeout(userScrollTimeout);
+          if (scrollSaveTimer !== null) clearTimeout(scrollSaveTimer);
           timeoutIds.forEach((id) => window.clearTimeout(id));
           setScrollPosition(tabId, currentTarget);
         };
@@ -907,6 +1063,57 @@ function sanitizeDoc(node: any): any {
       }
     };
   }, [editor, tabId, setScrollPosition, getScrollPosition, isActive]);
+
+  // Helper to dispatch CM highlights for the current unified matches
+  const dispatchCmHighlights = (matches: UnifiedMatch[], activeMatchIndex: number) => {
+    if (!editor) return;
+    const cmGroups = getCmMatchesByNode(matches);
+
+    // Dispatch highlights to each CM instance that has matches
+    for (const [pmNodePos, group] of cmGroups) {
+      const cmView = findCmViewAtPos(editor.view, pmNodePos);
+      if (!cmView) continue;
+      // Find which group entry (if any) is the active match
+      const currentIdx = group.findIndex((g) => g.index === activeMatchIndex);
+      cmView.dispatch({
+        effects: unifiedSearchHighlight.of({
+          ranges: group.map((g) => ({ from: g.cmFrom, to: g.cmTo })),
+          currentIndex: currentIdx,
+        }),
+      });
+    }
+
+    // Clear highlights from CM instances that have no matches
+    const allCmViews = findAllCmViews(editor.view);
+    for (const cmView of allCmViews) {
+      const cmDom = cmView.dom.closest(".cm-editor") as HTMLElement;
+      // Check if this CM view is in our groups (by checking its parent PM node)
+      let hasMatches = false;
+      for (const [pmNodePos] of cmGroups) {
+        const domNode = editor.view.nodeDOM(pmNodePos) as HTMLElement | null;
+        if (domNode && domNode.contains(cmDom)) {
+          hasMatches = true;
+          break;
+        }
+      }
+      if (!hasMatches) {
+        cmView.dispatch({
+          effects: unifiedSearchHighlight.of({ ranges: [], currentIndex: -1 }),
+        });
+      }
+    }
+  };
+
+  // Helper to clear all CM highlights
+  const clearCmHighlights = () => {
+    if (!editor) return;
+    const allCmViews = findAllCmViews(editor.view);
+    for (const cmView of allCmViews) {
+      cmView.dispatch({
+        effects: unifiedSearchHighlight.of({ ranges: [], currentIndex: -1 }),
+      });
+    }
+  };
 
   // Helper to recalculate matchPositions and reapply highlights
   const recalcFindMatches = () => {
@@ -923,9 +1130,11 @@ function sanitizeDoc(node: any): any {
         currentMatch: -1,
       });
       editor.view.dispatch(clearTr);
+      clearCmHighlights();
       return;
     }
-    // Dispatch plugin meta with options, always include currentMatch
+
+    // Dispatch PM highlight plugin meta
     const tr = editor.state.tr.setMeta(findHighlightPluginKey, {
       term: findTerm,
       matchCase,
@@ -935,32 +1144,18 @@ function sanitizeDoc(node: any): any {
     });
     editor.view.dispatch(tr);
 
-    // Compute matchPositions using same regex
-    const matches: { from: number; to: number }[] = [];
-    // build RegExp
-    let pattern = useRegex ? findTerm : escapeRegExp(findTerm);
-    if (!useRegex && matchWholeWord) pattern = `\\b${pattern}\\b`;
-    const flags = matchCase ? "g" : "gi";
-    let regex: RegExp;
-    try {
-      regex = new RegExp(pattern, flags);
-    } catch {
-      setMatchPositions([]);
-      setCurrentMatch(-1);
-      return;
-    }
-    editor.state.doc.descendants((node, pos) => {
-      if (node.isText && node.text) {
-        let m: RegExpExecArray | null;
-        while ((m = regex.exec(node.text)) !== null) {
-          matches.push({ from: pos + m.index, to: pos + m.index + m[0].length });
-          if (m.index === regex.lastIndex) regex.lastIndex++;
-        }
-      }
-      return true;
+    // Build unified matches across PM text and CM code blocks
+    const matches = buildUnifiedMatches(editor.state.doc, findTerm, {
+      matchCase,
+      matchWholeWord,
+      useRegex,
     });
+
     setMatchPositions(matches);
     setCurrentMatch(-1);
+
+    // Dispatch highlights to CM instances
+    dispatchCmHighlights(matches, -1);
   };
 
   // Unified effect to recalc as needed
@@ -969,165 +1164,204 @@ function sanitizeDoc(node: any): any {
   }, [editor, findTerm, matchCase, matchWholeWord, useRegex]);
 
   // Reapply highlights on document edits while search is active (without resetting selection)
+  // Debounced to avoid dispatching a new transaction on every keystroke
   useEffect(() => {
     if (!editor || !findTerm) return;
+    let searchDebounceTimer: number | null = null;
     const onUpdate = () => {
-      const tr = editor.state.tr.setMeta(findHighlightPluginKey, {
-        term: findTerm,
-        matchCase,
-        matchWholeWord,
-        useRegex,
-        currentMatch,
-      });
-      editor.view.dispatch(tr);
+      if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = window.setTimeout(() => {
+        searchDebounceTimer = null;
+        const tr = editor.state.tr.setMeta(findHighlightPluginKey, {
+          term: findTerm,
+          matchCase,
+          matchWholeWord,
+          useRegex,
+          currentMatch,
+        });
+        editor.view.dispatch(tr);
+      }, 200);
     };
     editor.on("update", onUpdate);
     return () => {
       editor.off("update", onUpdate);
+      if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
     };
   }, [editor, findTerm, matchCase, matchWholeWord, useRegex, currentMatch]);
+
+  // Navigate to a specific match (PM or CM)
+  const navigateToMatch = (matchIndex: number, shouldFocus: boolean = true) => {
+    if (!editor || matchIndex < 0 || matchIndex >= matchPositions.length) return;
+    const match = matchPositions[matchIndex];
+    const { source } = match;
+
+    if (source.type === "prosemirror") {
+      editor.commands.setTextSelection({ from: source.from, to: source.to });
+      if (shouldFocus) editor.commands.focus();
+    } else {
+      // CodeMirror match: scroll PM to show the code block, then select in CM
+      const cmView = findCmViewAtPos(editor.view, source.pmNodePos);
+      if (cmView) {
+        // Scroll PM so the code block is visible
+        const domNode = editor.view.nodeDOM(source.pmNodePos) as HTMLElement | null;
+        if (domNode) {
+          domNode.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        }
+        // Select the match range in CM
+        if (shouldFocus) cmView.focus();
+        cmView.dispatch({
+          selection: { anchor: source.cmFrom, head: source.cmTo },
+          scrollIntoView: true,
+        });
+      }
+    }
+
+    setCurrentMatch(matchIndex);
+
+    // Update PM highlight to show current match
+    const pmMatches = getPmMatches(matchPositions);
+    const pmCurrentIdx = source.type === "prosemirror"
+      ? pmMatches.findIndex((m) => m.index === match.index)
+      : -1;
+    const meta = { term: findTerm, matchCase, matchWholeWord, useRegex, currentMatch: pmCurrentIdx };
+    editor.view.dispatch(editor.state.tr.setMeta(findHighlightPluginKey, meta));
+
+    // Update CM highlights to show current match
+    dispatchCmHighlights(matchPositions, match.index);
+  };
 
   // Auto-select first match on new search term, without focusing editor
   useEffect(() => {
     if (showFind && editor && findTerm && matchPositions.length > 0 && currentMatch < 0) {
-      const { from, to } = matchPositions[0];
-      editor.commands.setTextSelection({ from, to });
-      setCurrentMatch(0);
+      navigateToMatch(0, false);
     }
   }, [editor, showFind, findTerm, matchPositions]);
 
   // Select first match by default when opening the find toolbar
   useEffect(() => {
     if (!showFind || !editor || matchPositions.length === 0) return;
-    const { from, to } = matchPositions[0];
-    editor.commands.setTextSelection({ from, to });
-    editor.commands.focus();
-    setCurrentMatch(0);
+    navigateToMatch(0, false);
   }, [showFind, editor]);
 
   const handleFindPrevious = () => {
     if (matchPositions.length === 0 || !editor) return;
     const prevIndex = (currentMatch - 1 + matchPositions.length) % matchPositions.length;
-    const { from, to } = matchPositions[prevIndex];
-    editor.commands.setTextSelection({ from, to });
-    editor.commands.focus();
-    setCurrentMatch(prevIndex);
-    // Re-dispatch plugin meta with updated currentMatch
-    const meta = { term: findTerm, matchCase, matchWholeWord, useRegex, currentMatch: prevIndex };
-    editor.view.dispatch(editor.state.tr.setMeta(findHighlightPluginKey, meta));
+    navigateToMatch(prevIndex, false);
   };
 
   const handleFindNext = () => {
     if (matchPositions.length === 0 || !editor) return;
     const nextIndex = (currentMatch + 1) % matchPositions.length;
-    const { from, to } = matchPositions[nextIndex];
-    editor.commands.setTextSelection({ from, to });
-    editor.commands.focus();
-    setCurrentMatch(nextIndex);
-    // Re-dispatch plugin meta with updated currentMatch
-    const meta = { term: findTerm, matchCase, matchWholeWord, useRegex, currentMatch: nextIndex };
-    editor.view.dispatch(editor.state.tr.setMeta(findHighlightPluginKey, meta));
+    navigateToMatch(nextIndex, false);
   };
 
   const handleReplace = () => {
     if (matchPositions.length === 0 || currentMatch < 0 || !editor) return;
     const replaceIndex = currentMatch;
-    const { from, to } = matchPositions[replaceIndex];
-    // Perform replacement
-    editor.commands.insertContentAt({ from, to }, replaceTerm);
+    const match = matchPositions[replaceIndex];
+    const { source } = match;
 
-    // Compute updated match positions
-    const newMatches: { from: number; to: number }[] = [];
-    // Build regex
-    let pattern = useRegex ? findTerm : escapeRegExp(findTerm);
-    if (!useRegex && matchWholeWord) pattern = `\\b${pattern}\\b`;
-    const flags = matchCase ? "g" : "gi";
-    let regex: RegExp;
-    try {
-      regex = new RegExp(pattern, flags);
-    } catch {
-      setMatchPositions([]);
-      setCurrentMatch(-1);
-      return;
-    }
-    editor.state.doc.descendants((node, pos) => {
-      if (node.isText && node.text) {
-        let m: RegExpExecArray | null;
-        while ((m = regex.exec(node.text)) !== null) {
-          newMatches.push({ from: pos + m.index, to: pos + m.index + m[0].length });
-          if (m.index === regex.lastIndex) regex.lastIndex++;
-        }
+    if (source.type === "prosemirror") {
+      // PM replacement — goes through PM undo stack
+      editor.commands.insertContentAt({ from: source.from, to: source.to }, replaceTerm);
+    } else {
+      // CM replacement — all through PM transaction for undo support
+      const node = editor.state.doc.nodeAt(source.pmNodePos);
+      if (node && typeof node.attrs.body === "string") {
+        const body = node.attrs.body;
+        const newBody =
+          body.slice(0, source.cmFrom) + replaceTerm + body.slice(source.cmTo);
+        const tr = editor.state.tr.setNodeMarkup(source.pmNodePos, undefined, {
+          ...node.attrs,
+          body: newBody,
+        });
+        editor.view.dispatch(tr);
       }
-      return true;
+    }
+
+    // Recompute unified matches after replacement
+    const newMatches = buildUnifiedMatches(editor.state.doc, findTerm, {
+      matchCase,
+      matchWholeWord,
+      useRegex,
     });
     setMatchPositions(newMatches);
 
-    // Select next match
+    // Navigate to next match
     if (newMatches.length > 0) {
       const nextIndex = replaceIndex >= newMatches.length ? 0 : replaceIndex;
-      const { from: nf, to: nt } = newMatches[nextIndex];
-      editor.commands.setTextSelection({ from: nf, to: nt });
-      editor.commands.focus();
-      setCurrentMatch(nextIndex);
+      // Defer navigation so state has settled
+      setTimeout(() => navigateToMatch(nextIndex), 0);
     } else {
       setCurrentMatch(-1);
+      clearCmHighlights();
     }
 
-    // Refresh highlights
-    const tr = editor.state.tr.setMeta(findHighlightPluginKey, {
+    // Refresh PM highlights
+    const tr2 = editor.state.tr.setMeta(findHighlightPluginKey, {
       term: findTerm,
       matchCase,
       matchWholeWord,
       useRegex,
       currentMatch: newMatches.length > 0 ? (replaceIndex >= newMatches.length ? 0 : replaceIndex) : -1,
     });
-    editor.view.dispatch(tr);
+    editor.view.dispatch(tr2);
   };
 
   const handleReplaceAll = () => {
     if (!editor || matchPositions.length === 0) return;
-    // Perform replacements in reverse order to preserve offsets
-    [...matchPositions].reverse().forEach(({ from, to }) => {
-      editor.commands.insertContentAt({ from, to }, replaceTerm);
-    });
 
-    // Recalculate matches using same regex logic
-    const newMatches: { from: number; to: number }[] = [];
-    let pattern = useRegex ? findTerm : escapeRegExp(findTerm);
-    if (!useRegex && matchWholeWord) pattern = `\b${pattern}\b`;
-    const flags = matchCase ? "g" : "gi";
-    let regex: RegExp;
-    try {
-      regex = new RegExp(pattern, flags);
-    } catch {
-      setMatchPositions([]);
-      setCurrentMatch(-1);
-      return;
-    }
-    editor.state.doc.descendants((node, pos) => {
-      if (node.isText && node.text) {
-        let m: RegExpExecArray | null;
-        while ((m = regex.exec(node.text)) !== null) {
-          newMatches.push({ from: pos + m.index, to: pos + m.index + m[0].length });
-          if (m.index === regex.lastIndex) regex.lastIndex++;
-        }
+    // Build a single PM transaction for all replacements (single undo step)
+    let tr = editor.state.tr;
+
+    // Separate PM and CM matches
+    const pmMatches = matchPositions
+      .filter((m) => m.source.type === "prosemirror")
+      .map((m) => m.source as { type: "prosemirror"; from: number; to: number });
+    const cmMatchesByNode = getCmMatchesByNode(matchPositions);
+
+    // Replace CM matches first (setNodeMarkup doesn't shift PM text positions)
+    for (const [pmNodePos, group] of cmMatchesByNode) {
+      const node = tr.doc.nodeAt(pmNodePos);
+      if (!node || typeof node.attrs.body !== "string") continue;
+      // Apply all replacements in reverse offset order within this body
+      let body = node.attrs.body;
+      const sorted = [...group].sort((a, b) => b.cmFrom - a.cmFrom);
+      for (const { cmFrom, cmTo } of sorted) {
+        body = body.slice(0, cmFrom) + replaceTerm + body.slice(cmTo);
       }
-      return true;
+      tr = tr.setNodeMarkup(pmNodePos, undefined, { ...node.attrs, body });
+    }
+
+    // Replace PM matches in reverse order to preserve offsets
+    const sortedPm = [...pmMatches].sort((a, b) => b.from - a.from);
+    for (const { from, to } of sortedPm) {
+      tr = tr.replaceWith(from, to, editor.schema.text(replaceTerm));
+    }
+
+    editor.view.dispatch(tr);
+
+    // Recompute unified matches
+    const newMatches = buildUnifiedMatches(editor.state.doc, findTerm, {
+      matchCase,
+      matchWholeWord,
+      useRegex,
     });
     setMatchPositions(newMatches);
     setCurrentMatch(-1);
 
-    // Re-dispatch highlights
-    const tr = editor.state.tr.setMeta(findHighlightPluginKey, {
+    // Refresh highlights
+    const tr2 = editor.state.tr.setMeta(findHighlightPluginKey, {
       term: findTerm,
       matchCase,
       matchWholeWord,
       useRegex,
       currentMatch: -1,
     });
-    editor.view.dispatch(tr);
+    editor.view.dispatch(tr2);
+    dispatchCmHighlights(newMatches, -1);
 
-    // If no matches remain, collapse the selection at the end of replacements
+    // If no matches remain, collapse selection
     if (newMatches.length === 0) {
       const pos = editor.state.selection.to;
       editor.commands.setTextSelection({ from: pos, to: pos });
@@ -1161,14 +1395,54 @@ function sanitizeDoc(node: any): any {
     };
   }, [editor, isActive]);
 
-  // Note: parseError state was removed as we now handle errors gracefully with fallback content
-  if (!editor) return null;
+  // Listen for "scroll to section" events from the response panel
+  useEffect(() => {
+    if (!editor || !isActive) return;
 
-  // Note: parseError state was removed as we now handle errors gracefully with fallback content
+    const handleScrollToSection = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      console.log('[VoidenEditor] scroll-to-section event received:', detail);
+      const { sectionIndex } = detail;
+      if (typeof sectionIndex !== "number") return;
+
+      // Always scroll to the TOP of the section:
+      // Section 0 → doc start, Section N → the Nth separator node
+      let targetPos = 0;
+
+      if (sectionIndex === 0) {
+        targetPos = 1;
+      } else {
+        let currentSection = 0;
+        editor.state.doc.forEach((child, offset) => {
+          if (child.type.name === "request-separator") {
+            currentSection++;
+            if (currentSection === sectionIndex) {
+              // Position AT the separator (top of section)
+              targetPos = offset + 1;
+            }
+          }
+        });
+      }
+
+      if (targetPos > 0) {
+        const pos = Math.min(targetPos, editor.state.doc.content.size);
+        // Set cursor near the target and scroll into view — also gives focus to the editor
+        const $pos = editor.state.doc.resolve(pos);
+        const selection = TextSelection.near($pos);
+        editor.view.dispatch(editor.state.tr.setSelection(selection).scrollIntoView());
+        editor.view.focus();
+        e.stopImmediatePropagation();
+      }
+    };
+
+    window.addEventListener("voiden:scroll-to-section", handleScrollToSection);
+    return () => window.removeEventListener("voiden:scroll-to-section", handleScrollToSection);
+  }, [editor, isActive]);
+
   if (!editor) return null;
 
   return (
-    <div ref={editorRef} className="h-full flex flex-col relative">
+    <div ref={editorRef} className="h-full w-full flex flex-col relative">
       {showFind && (
         <div className="absolute top-2 right-2 z-50">
           <div className="bg-panel border border-border rounded-md shadow-[0_4px_12px_rgba(0,0,0,0.3)] overflow-hidden min-w-[550px] max-w-[550px]">
@@ -1254,6 +1528,8 @@ function sanitizeDoc(node: any): any {
                     setShowReplaceSection(false);
                     setFindTerm(""); // Clear search term
                     setReplaceTerm(""); // Clear replace term
+                    setUnifiedSearchActive(false);
+                    clearCmHighlights();
                   }}
                   className="p-1.5 rounded transition-all w-7 h-7 flex items-center justify-center border bg-active text-comment border-panel-border hover:bg-active hover:text-text hover:border-accent active:scale-[0.96]"
                   title="Close (Esc)"
@@ -1267,8 +1543,8 @@ function sanitizeDoc(node: any): any {
                 {findTerm && matchPositions.length > 0
                   ? `${currentMatch + 1} of ${matchPositions.length}`
                   : findTerm
-                  ? "No results"
-                  : ""}
+                    ? "No results"
+                    : ""}
               </span>
             </div>
 
@@ -1303,7 +1579,7 @@ function sanitizeDoc(node: any): any {
                   title="Replace (Enter)"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M5 12l5 5l10 -10"/>
+                    <path d="M5 12l5 5l10 -10" />
                   </svg>
                 </button>
                 <button
@@ -1318,7 +1594,7 @@ function sanitizeDoc(node: any): any {
                   title={`Replace All ${isMac ? '(⌘Enter)' : '(Ctrl+Enter)'}`}
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M5 3l5 5l10 -10M5 10l5 5l10 -10M5 17l5 5l10 -10"/>
+                    <path d="M5 3l5 5l10 -10M5 10l5 5l10 -10M5 17l5 5l10 -10" />
                   </svg>
                 </button>
 
@@ -1358,6 +1634,15 @@ function sanitizeDoc(node: any): any {
         </div>
       )}
 
+      {isLoadingContent && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-editor pointer-events-none select-none">
+          <svg className="animate-spin h-5 w-5 text-accent" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+          </svg>
+          <span className="text-xs text-comment font-mono animate-pulse">Loading file…</span>
+        </div>
+      )}
       <div className="mx-auto w-full px-2 bg-editor" style={{ maxWidth: 'var(--prose-max-width, 860px)' }}>
         {isActive && <VoidenDragMenu editor={editor} />}
         <EditorContent editor={editor} />

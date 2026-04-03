@@ -9,6 +9,8 @@ import { Editor } from "@tiptap/core";
 import { sendRequestHybrid } from "./sendRequestHybrid";
 import type { RequestBuildHandler, ResponseProcessHandler, ResponseSection } from "@voiden/sdk/ui";
 import { requestLogger } from "@/core/lib/logger";
+import { getFirstSectionLabel } from "@/core/editors/voiden/extensions/sectionIndicator";
+import { expandLinkedBlocksInDoc } from "@/core/editors/voiden/utils/expandLinkedBlocks";
 
 interface RequestOrchestrator {
   /** Registered request build handlers from plugins */
@@ -36,10 +38,20 @@ interface RequestOrchestrator {
   clear: () => void;
 }
 
+export interface RequestExecuteOptions {
+  /** ProseMirror position of the request section to execute (for multi-request docs) */
+  sectionPos?: number;
+  /** Direct section index (0-based), used when DOM-based detection is available */
+  sectionIndex?: number;
+}
+
 class RequestOrchestratorImpl implements RequestOrchestrator {
   requestHandlers: RequestBuildHandler[] = [];
   responseHandlers: ResponseProcessHandler[] = [];
   responseSections: ResponseSection[] = [];
+
+  /** Options for the currently executing request (available to handlers) */
+  currentRequestOptions: RequestExecuteOptions = {};
 
   registerRequestHandler(handler: RequestBuildHandler) {
     requestLogger.info("Plugin registered request handler");
@@ -56,16 +68,111 @@ class RequestOrchestratorImpl implements RequestOrchestrator {
     this.responseSections.push(section);
   }
 
-  async executeRequest(editor: Editor, environment?: Record<string, string>, signal?: AbortSignal): Promise<any> {
+  async executeRequest(editor: Editor, environment?: Record<string, string>, signal?: AbortSignal, options?: RequestExecuteOptions): Promise<any> {
     requestLogger.info("Starting request execution");
+    this.currentRequestOptions = options || {};
 
     // Step 1: Build request through plugin chain
     requestLogger.info(`Building request through ${this.requestHandlers.length} plugin handler(s)`);
-    let request: any = {};
+    let request: any = {
+      __sectionPos: options?.sectionPos,
+    };
+
+    // For multi-request documents, create a scoped editor proxy so all handlers
+    // automatically get section-scoped JSON when they call editor.getJSON()
+    let handlerEditor: Editor = editor;
+    const sectionPos = options?.sectionPos;
+    let resolvedSectionIndex: number | undefined;
+    let resolvedColorIndex: number | undefined;
+    let resolvedSectionLabel: string | undefined;
+    const hasSectionInfo = options?.sectionIndex !== undefined || sectionPos !== undefined;
+
+    // Cache for expanded JSON so we only expand linked blocks once
+    let expandedJsonCache: any = null;
+
+    {
+      const originalGetJSON = editor.getJSON.bind(editor);
+      handlerEditor = Object.create(editor);
+
+      // Use direct sectionIndex if provided (DOM-based), otherwise compute from position
+      let sectionIndex = options?.sectionIndex ?? 0;
+      if (hasSectionInfo) {
+        if (options?.sectionIndex === undefined && sectionPos !== undefined) {
+          editor.state.doc.forEach((child, offset) => {
+            const nodeEnd = offset + 1 + child.nodeSize;
+            if (child.type.name === "request-separator" && sectionPos >= nodeEnd) {
+              sectionIndex++;
+              resolvedColorIndex = typeof child.attrs.colorIndex === "number" ? child.attrs.colorIndex : undefined;
+              resolvedSectionLabel = child.attrs.label || undefined;
+            }
+          });
+        } else if (options?.sectionIndex !== undefined) {
+          // Look up the colorIndex for the given sectionIndex
+          let sepIdx = 0;
+          editor.state.doc.forEach((child) => {
+            if (child.type.name === "request-separator") {
+              sepIdx++;
+              if (sepIdx === sectionIndex) {
+                resolvedColorIndex = typeof child.attrs.colorIndex === "number" ? child.attrs.colorIndex : undefined;
+                resolvedSectionLabel = child.attrs.label || undefined;
+              }
+            }
+          });
+        }
+        resolvedSectionIndex = sectionIndex;
+      }
+
+      handlerEditor.getJSON = () => {
+        // If we've already expanded, return cached result
+        if (expandedJsonCache) return expandedJsonCache;
+
+        const fullJson = originalGetJSON();
+        if (!fullJson.content) return fullJson;
+
+        if (!hasSectionInfo) {
+          // No section scoping needed, just return the full document
+          return fullJson;
+        }
+
+        // Split content at request-separator nodes
+        const sections: any[][] = [[]];
+        for (const node of fullJson.content) {
+          if (node.type === "request-separator") {
+            sections.push([]);
+          } else {
+            sections[sections.length - 1].push(node);
+          }
+        }
+
+        console.log('[orchestrator] sectionPos:', sectionPos,
+          'sectionIndex:', sectionIndex,
+          'totalSections:', sections.length,
+          'allTypes:', fullJson.content.map((n: any) => n.type),
+          'scopedTypes:', (sections[sectionIndex] || []).map((n: any) => n.type));
+
+        return { type: "doc", content: sections[sectionIndex] || [] };
+      };
+    }
+
+    // Expand linked blocks once at the orchestrator level so plugins
+    // receive fully-resolved documents without needing direct core imports
+    try {
+      const rawJson = handlerEditor.getJSON();
+      expandedJsonCache = await expandLinkedBlocksInDoc(rawJson, { forceRefresh: true });
+      // Override getJSON to return the expanded version
+      handlerEditor.getJSON = () => expandedJsonCache;
+    } catch (error) {
+      requestLogger.error("Failed to expand linked blocks:", error);
+      // Fall through with unexpanded JSON
+    }
 
     for (const handler of this.requestHandlers) {
       try {
-        request = await handler(request, editor);
+        request = await handler(request, handlerEditor);
+        // Preserve __sectionPos across handler chain
+        if (sectionPos !== undefined && request) {
+          request.__sectionPos = sectionPos;
+        }
       } catch (error) {
         requestLogger.error("Error in plugin request handler:", error);
         throw error;
@@ -73,10 +180,27 @@ class RequestOrchestratorImpl implements RequestOrchestrator {
     }
 
     // Step 2: Send request through core pipeline
-    const response = await sendRequestHybrid(request, editor, signal, window.electron);
+    // Pass handlerEditor (section-scoped) so pipeline hooks get scoped getJSON()
+    const response = await sendRequestHybrid(request, handlerEditor, signal, window.electron);
 
     if (!response) {
       throw new Error("No response received from request pipeline");
+    }
+
+    // Attach section info so response handlers can link back to the originating section
+    if (resolvedSectionIndex !== undefined) {
+      response.__sectionIndex = resolvedSectionIndex;
+      // First section (index 0) has no separator, default its color to 0
+      response.__sectionColorIndex = resolvedColorIndex ?? 0;
+      if (resolvedSectionLabel) {
+        response.__sectionLabel = resolvedSectionLabel;
+      } else if (resolvedSectionIndex === 0) {
+        // First section has no separator — get label from the editor's store
+        const label = getFirstSectionLabel(editor.view?.dom ?? null);
+        if (label && label !== "Request 1") {
+          response.__sectionLabel = label;
+        }
+      }
     }
 
     // Step 3: Process response through plugin chain

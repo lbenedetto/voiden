@@ -31,7 +31,6 @@ export const SeamlessNavigation = Extension.create({
                 (event.key === 'a' || event.key === 'A');
 
               if (isSelectAll) {
-                console.log('[SeamlessNav] Cmd+A detected - setting modifierKeyPressed flag');
                 modifierKeyPressed = true;
               }
 
@@ -47,7 +46,6 @@ export const SeamlessNavigation = Extension.create({
               if (event.key === 'Meta' || event.key === 'Control' ||
                 event.key === 'a' || event.key === 'A') {
                 modifierKeyPressed = false;
-                console.log('[SeamlessNav] Modifier key released - resetting flag');
               }
               return false;
             }
@@ -57,7 +55,6 @@ export const SeamlessNavigation = Extension.create({
         appendTransaction: (transactions, oldState, newState) => {
           // Skip if modifier key was used
           if (modifierKeyPressed) {
-            console.log('[SeamlessNav] Skipping appendTransaction - Cmd/A key combo detected');
             return null;
           }
           pendingCodeMirrorFocus = null;
@@ -67,7 +64,6 @@ export const SeamlessNavigation = Extension.create({
             return null;
           }
           if (isSettingCodeMirrorFocus) {
-            console.log('[SeamlessNav] Skipping appendTransaction - CodeMirror focus in progress');
             return null;
           }
 
@@ -93,13 +89,6 @@ export const SeamlessNavigation = Extension.create({
           const { $anchor: old$anchor } = oldState.selection;
           const { $anchor } = newState.selection;
           const parent = $anchor.parent;
-
-          console.log('[SeamlessNav] Position changed:', {
-            oldPos: old$anchor.pos,
-            newPos: $anchor.pos,
-            movingBackward: old$anchor.pos > $anchor.pos,
-            parent: parent.type.name,
-          });
 
           // Define block types
           const codeBlockTypes = [
@@ -166,7 +155,6 @@ export const SeamlessNavigation = Extension.create({
             }
           }
 
-          console.log('[SeamlessNav] Column tracking:', { wasInTableCell, oldColumnIndex });
 
           // Check if we were in a code block before (by checking the parent node type)
           let wasInCodeBlock = false;
@@ -184,7 +172,6 @@ export const SeamlessNavigation = Extension.create({
             // Try to find if there's a DIFFERENT table block before us to enter
             if (wasInTableCell && parent.type.name === 'doc') {
 
-              console.log('[SeamlessNav] Special table-to-table case triggered');
 
               // First, figure out which table block we just exited from
               let oldTablePos = null;
@@ -260,7 +247,6 @@ export const SeamlessNavigation = Extension.create({
                 currentPos = childEnd;
               }
 
-              console.log('[SeamlessNav] Special case - nodeBefore:', nodeBefore?.type.name, 'at pos:', nodeBeforePos);
 
 
               // Only enter the table if it's DIFFERENT from the one we just exited
@@ -345,14 +331,6 @@ export const SeamlessNavigation = Extension.create({
               // Determine movement direction
               const movingBackward = old$anchor.pos > $anchor.pos;
 
-              console.log('[SeamlessNav] General case triggered:', {
-                wasInTableCell,
-                wasInCodeBlock,
-                isInvalidPosition,
-                movingBackward,
-                oldBlockPos,
-              });
-
               // Find blocks adjacent to current position
               let nodeBeforePos = null;
               let nodeBefore = null;
@@ -403,15 +381,6 @@ export const SeamlessNavigation = Extension.create({
                 currentPos = childEnd;
               }
 
-              console.log('[SeamlessNav] All nodes:', allNodes);
-              console.log('[SeamlessNav] Current position:', $anchor.pos);
-              console.log('[SeamlessNav] Adjacent nodes:', {
-                nodeBefore: nodeBefore?.type.name,
-                nodeBeforePos,
-                nodeAfter: nodeAfter?.type.name,
-                nodeAfterPos,
-              });
-
               // Choose which block to enter based on movement direction
               let targetNode = null;
               let targetPos = null;
@@ -422,26 +391,15 @@ export const SeamlessNavigation = Extension.create({
                 targetNode = nodeBefore;
                 targetPos = nodeBeforePos;
                 enterAtEnd = true;
-                console.log('[SeamlessNav] Chose nodeBefore:', targetNode.type.name);
               } else if (!movingBackward && nodeAfter && nodeAfterPos !== oldBlockPos) {
                 // Moving forward - enter next block at start
                 targetNode = nodeAfter;
                 targetPos = nodeAfterPos;
                 enterAtEnd = false;
-                console.log('[SeamlessNav] Chose nodeAfter:', targetNode.type.name);
               } else {
-                console.log('[SeamlessNav] No target node selected');
               }
 
               if (targetNode && targetPos !== null) {
-                console.log('[SeamlessNav] Attempting to enter:', {
-                  nodeType: targetNode.type.name,
-                  targetPos,
-                  enterAtEnd,
-                  isTable: isTableBlock(targetNode),
-                  isCodeBlock: codeBlockTypes.includes(targetNode.type.name),
-                });
-
                 // If this is a table, navigate into it
                 if (isTableBlock(targetNode)) {
                   // Determine which column to enter
@@ -449,7 +407,6 @@ export const SeamlessNavigation = Extension.create({
                   // Otherwise, default to leftmost column (column 0)
                   const targetColumnIndex = (wasInTableCell && oldColumnIndex >= 0) ? oldColumnIndex : 0;
 
-                  console.log('[SeamlessNav] Target column:', targetColumnIndex, '(wasInTableCell:', wasInTableCell, ')');
 
                   // Try to navigate to specific column
                   if (targetColumnIndex >= 0) {
@@ -490,7 +447,6 @@ export const SeamlessNavigation = Extension.create({
                               try {
                                 const $pos = newState.doc.resolve(p);
                                 if ($pos.parent.isTextblock && $pos.parent.type.spec.content?.includes('inline')) {
-                                  console.log('[SeamlessNav] ✅ Navigating to table at END, column', targetColumnIndex, 'pos:', p);
                                   return newState.tr.setSelection(TextSelection.create(newState.doc, p));
                                 }
                               } catch (e) { }
@@ -501,7 +457,6 @@ export const SeamlessNavigation = Extension.create({
                               try {
                                 const $pos = newState.doc.resolve(p);
                                 if ($pos.parent.isTextblock && $pos.parent.type.spec.content?.includes('inline')) {
-                                  console.log('[SeamlessNav] ✅ Navigating to table at START, column', targetColumnIndex, 'pos:', p);
                                   return newState.tr.setSelection(TextSelection.create(newState.doc, p));
                                 }
                               } catch (e) { }
@@ -528,7 +483,6 @@ export const SeamlessNavigation = Extension.create({
                       try {
                         const $pos = newState.doc.resolve(pos);
                         if ($pos.parent.isTextblock && $pos.parent.type.spec.content?.includes('inline')) {
-                          console.log('[SeamlessNav] ✅ Navigating to table at END (fallback), pos:', pos);
                           return newState.tr.setSelection(TextSelection.create(newState.doc, pos));
                         }
                       } catch (e) { }
@@ -539,7 +493,6 @@ export const SeamlessNavigation = Extension.create({
                       try {
                         const $pos = newState.doc.resolve(pos);
                         if ($pos.parent.isTextblock && $pos.parent.type.spec.content?.includes('inline')) {
-                          console.log('[SeamlessNav] ✅ Navigating to table at START (fallback), pos:', pos);
                           return newState.tr.setSelection(TextSelection.create(newState.doc, pos));
                         }
                       } catch (e) { }
@@ -550,7 +503,6 @@ export const SeamlessNavigation = Extension.create({
                 // If this is a CodeMirror block, we need to focus it via DOM
                 if (codeBlockTypes.includes(targetNode.type.name)) {
                   const direction = enterAtEnd ? 'end' : 'start';
-                  console.log('[SeamlessNav] ✅ Navigating to CodeMirror:', direction);
                   pendingCodeMirrorFocus = {
                     pos: targetPos,
                     targetNode: targetNode,
@@ -693,7 +645,6 @@ export const SeamlessNavigation = Extension.create({
                           cmEditor.cmView.focus();
                           const docLength = cmEditor.cmView.state.doc.length;
                           const cursorPos = direction === 'start' ? 0 : Math.max(0, docLength);
-                          console.log('Direction :' + direction + "\n cursorPos : " + cursorPos);
                           cmEditor.cmView.dispatch({
                             selection: { anchor: cursorPos, head: cursorPos },
                             scrollIntoView: true
@@ -705,7 +656,6 @@ export const SeamlessNavigation = Extension.create({
                         }, 100);
                         setTimeout(() => {
                           isSettingCodeMirrorFocus = false;
-                          console.log('[SeamlessNav] CodeMirror focus complete, navigation unlocked');
                         }, 50);
                       })
 

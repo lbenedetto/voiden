@@ -4,7 +4,23 @@ import { getActiveProject } from "../state";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { invalidateGitCache } from "../git";
+import { invalidateGitCache, getCachedIsRepo, invalidateRepoCache, getSharedGit } from "../git";
+import { setCloning } from "../fileWatcher";
+import { logger } from "../logger";
+
+// In-flight deduplication: prevents polling intervals from stacking up
+// concurrent git processes when a call takes longer than the poll interval.
+// Keyed by project path so switching projects starts fresh.
+function dedupeCall<T>(
+  store: Map<string, Promise<T>>,
+  key: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (store.has(key)) return store.get(key)!;
+  const p = fn().finally(() => store.delete(key));
+  store.set(key, p);
+  return p;
+}
 
 
 function trackingToRemoteName(tracking: string | null | undefined): string | null {
@@ -65,6 +81,25 @@ function normalizeCurrentBranchName(branch: string | null | undefined): string |
   return branch;
 }
 
+// Per-handler in-flight stores (keyed by project path)
+const pendingStatus = new Map<string, Promise<any>>();
+const pendingLog = new Map<string, Promise<any>>();
+const pendingConflicts = new Map<string, Promise<any>>();
+const pendingFetch = new Map<string, Promise<any>>();
+const pendingTree = new Map<string, Promise<any>>();
+const pendingStash = new Map<string, Promise<any>>();
+
+// ── getRemoteUrl cache ────────────────────────────────────────────────────────
+// Remote URLs rarely change; cache them to prevent repeated subprocess spawning
+// on every panel/tab render. Invalidated by setRemoteUrl, add-remote, removeRemote.
+interface RemoteUrlEntry { url: string | null; timestamp: number; }
+const remoteUrlCache = new Map<string, RemoteUrlEntry>();
+const REMOTE_URL_TTL = 600_000; // 10 minutes
+
+function invalidateRemoteUrlCache(projectPath: string): void {
+  remoteUrlCache.delete(projectPath);
+}
+
 export function registerGitIpcHandlers() {
   // Get git repository root directory
   ipcMain.handle("git:getRepoRoot", async (event: IpcMainInvokeEvent) => {
@@ -74,8 +109,8 @@ export function registerGitIpcHandlers() {
     }
 
     try {
-      const git = simpleGit(activeProject);
-      const isRepo = await git.checkIsRepo();
+      const git = getSharedGit(activeProject);
+      const isRepo = await getCachedIsRepo(activeProject);
       if (!isRepo) {
         return null;
       }
@@ -103,26 +138,61 @@ export function registerGitIpcHandlers() {
       // Derive the repo folder name from the URL (e.g. "my-repo" from ".../my-repo.git")
       const baseName = repoUrl.replace(/\.git$/, "").split("/").pop() || "repo";
 
+      // Helper: async directory-exists check
+      const dirExists = (p: string) =>
+        fs.promises.access(p).then(() => true).catch(() => false);
+
+      // Helper to send progress to the renderer safely
+      const sendProgress = (stage: string, progress: number) => {
+        try {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send("git:clone:progress", { stage, progress });
+          }
+        } catch { /* renderer disposed */ }
+      };
+
+      // Create a git instance that forwards clone progress to the renderer
+      const makeProgressGit = (baseDir: string) =>
+        simpleGit({
+          baseDir,
+          progress({ stage, progress }) {
+            sendProgress(stage, progress);
+          },
+        });
+
       if (!activeProject) {
         // No active project — clone into ~/Voiden/<name>, then scaffold .voiden
         const voidenHome = path.join(os.homedir(), "Voiden");
-        if (!fs.existsSync(voidenHome)) {
-          await fs.promises.mkdir(voidenHome, { recursive: true });
-        }
+        await fs.promises.mkdir(voidenHome, { recursive: true });
 
-        // Find a unique folder name (same logic as createProjectDirectory)
+        // Find a unique folder name
         let newFolderName = baseName;
         let newCounter = 1;
-        while (fs.existsSync(path.join(voidenHome, newFolderName))) {
+        while (await dirExists(path.join(voidenHome, newFolderName))) {
           newFolderName = `${baseName}-${newCounter}`;
           newCounter++;
         }
 
         const newProjectPath = path.join(voidenHome, newFolderName);
 
-        // Clone directly (don't pre-create the directory — git clone will create it)
-        const gitParent = simpleGit(voidenHome);
-        await gitParent.raw(["clone", "--depth", "1", cloneUrl, newFolderName]);
+        // Clone directly (git clone creates the directory).
+        // Suppress watcher events for the clone destination so the IPC channel
+        // isn't flooded with file:new events for every file being cloned.
+        const gitParent = makeProgressGit(voidenHome);
+        setCloning(newProjectPath, true);
+        let newLfsWarning = false;
+        try {
+          await gitParent.clone(cloneUrl, newFolderName, ["--depth", "1", "--no-local"]);
+        } catch (cloneErr: any) {
+          const msg: string = cloneErr?.message || String(cloneErr);
+          if (msg.includes("Clone succeeded, but checkout failed") || (msg.includes("git-lfs") && msg.includes("command not found"))) {
+            newLfsWarning = true; // repo downloaded, LFS files missing — treat as success with warning
+          } else {
+            throw cloneErr;
+          }
+        } finally {
+          setCloning(newProjectPath, false);
+        }
 
         // Add .voiden scaffold after successful clone
         const voidenDir = path.join(newProjectPath, ".voiden");
@@ -132,20 +202,34 @@ export function registerGitIpcHandlers() {
           JSON.stringify({ project: newFolderName })
         );
 
-        return { clonedPath: newProjectPath, clonedInPlace: false, isNewProject: true };
+        return { clonedPath: newProjectPath, clonedInPlace: false, isNewProject: true, lfsWarning: newLfsWarning };
       }
 
       // Find a unique folder name inside the active project (repo, repo-1, repo-2, ...)
       let folderName = baseName;
       let counter = 1;
-      while (fs.existsSync(path.join(activeProject, folderName))) {
+      while (await dirExists(path.join(activeProject, folderName))) {
         folderName = `${baseName}-${counter}`;
         counter++;
       }
 
-      const git = simpleGit(activeProject);
-      await git.raw(["clone", "--depth", "1", cloneUrl, folderName]);
-      return { clonedPath: path.join(activeProject, folderName), clonedInPlace: false, isNewProject: false };
+      const clonedPath = path.join(activeProject, folderName);
+      const gitWithProgress = makeProgressGit(activeProject);
+      setCloning(clonedPath, true);
+      let lfsWarning = false;
+      try {
+        await gitWithProgress.clone(cloneUrl, folderName, ["--depth", "1", "--no-local"]);
+      } catch (cloneErr: any) {
+        const msg: string = cloneErr?.message || String(cloneErr);
+        if (msg.includes("Clone succeeded, but checkout failed") || (msg.includes("git-lfs") && msg.includes("command not found"))) {
+          lfsWarning = true;
+        } else {
+          throw cloneErr;
+        }
+      } finally {
+        setCloning(clonedPath, false);
+      }
+      return { clonedPath, clonedInPlace: false, isNewProject: false, lfsWarning };
     } catch (error: any) {
       console.error("Error cloning repository:", error);
       const raw: string = (error?.message || String(error)).replace(/:[^@]*@/, ":***@");
@@ -178,8 +262,10 @@ export function registerGitIpcHandlers() {
     }
 
     try {
-      const git = simpleGit(activeProject);
+      const git = getSharedGit(activeProject);
       await git.init();
+      // Invalidate so subsequent isRepo checks reflect the newly created repo
+      invalidateRepoCache(activeProject);
       return true;
     } catch (error) {
       console.error("Error initializing git repository:", error);
@@ -190,168 +276,91 @@ export function registerGitIpcHandlers() {
   // Get working directory status (all changed files)
   ipcMain.handle("git:getStatus", async (event: IpcMainInvokeEvent) => {
     const activeProject = await getActiveProject(event);
-    if (!activeProject) {
-      return null;
-    }
-
+    if (!activeProject) return null;
+    try { await fs.promises.access(activeProject); } catch { return null; }
+    // Deduplicate: if a status call is already in-flight for this project,
+    // return the same promise rather than spawning more git processes.
+    return dedupeCall(pendingStatus, activeProject, async () => {
     try {
-      const git = simpleGit(activeProject);
+      // isRepo check is cached — no subprocess for projects we've seen before
+      if (!await getCachedIsRepo(activeProject)) return null;
 
-      const isRepo = await git.checkIsRepo();
-      if (!isRepo) {
-        return null;
+      const git = getSharedGit(activeProject);
+
+      // subprocess 1: git status — gives files, branch name, tracking, ahead/behind
+      const _t0 = Date.now();
+      const status = await git.status();
+      const _statusMs = Date.now() - _t0;
+      if (_statusMs > 500) {
+        logger.warn('git', `git:getStatus slow (${_statusMs}ms) — large repo`, {
+          project: activeProject, statusMs: _statusMs,
+          tip: 'Run: git config core.fsmonitor true && git config core.untrackedCache true',
+        });
       }
-
-      const [status, branchSummary] = await Promise.all([
-        git.status(),
-        git.branch(),
-      ]);
-
-      const currentBranch = normalizeCurrentBranchName(branchSummary.current);
+      const currentBranch = normalizeCurrentBranchName(status.current);
       const rawTracking = status.tracking || null;
 
-      let upstreamShort: string | null = null;
-      let upstreamFullRef: string | null = null;
-      try {
-        const [shortRaw, fullRaw] = await Promise.all([
-          git.raw(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']),
-          git.raw(['rev-parse', '--symbolic-full-name', '@{upstream}']),
-        ]);
-        upstreamShort = shortRaw.trim() || null;
-        upstreamFullRef = fullRaw.trim() || null;
-      } catch {
-        upstreamShort = null;
-        upstreamFullRef = null;
-      }
-
-      // Upstream can be configured but not actually exist as a local remote-tracking ref yet.
-      // In that case, ignore it here and fall back to our resolved remote-ref lookup.
-      if (upstreamFullRef) {
-        try {
-          await git.raw(['show-ref', '--verify', upstreamFullRef]);
-        } catch {
-          upstreamFullRef = null;
-        }
-      }
-
-      let configuredTracking: string | null = null;
-      if (currentBranch) {
-        try {
-          const [remoteRaw, mergeRaw] = await Promise.all([
-            git.raw(['config', '--get', `branch.${currentBranch}.remote`]),
-            git.raw(['config', '--get', `branch.${currentBranch}.merge`]),
-          ]);
-          const remote = remoteRaw.trim();
-          const mergeRef = mergeRaw.trim();
-          const mergeBranch = mergeRef.replace(/^refs\/heads\//, '');
-          if (remote && remote !== '.' && mergeRef.startsWith('refs/heads/') && mergeBranch) {
-            configuredTracking = `${remote}/${mergeBranch}`;
-          }
-        } catch {
-          configuredTracking = null;
-        }
-      }
-
-      // A branch is "published" if a remote-tracking ref exists for it.
-      // Remote-tracking branches (remotes/origin/... or origin/...) are always published.
-      const isRemoteTrackingBranch = currentBranch?.startsWith('remotes/') || currentBranch?.startsWith('origin/');
-
-      // Resolve the remote-tracking ref: prefer configured upstream, then search all remotes.
-      let resolvedRemoteRef: string | null =
-        upstreamFullRef && upstreamFullRef.startsWith('refs/remotes/')
-          ? upstreamFullRef
-          : rawTracking
-          ? `refs/remotes/${rawTracking}`
-          : configuredTracking
-            ? `refs/remotes/${configuredTracking}`
-            : null;
-
-      if (!resolvedRemoteRef && currentBranch && !isRemoteTrackingBranch) {
-        try {
-          const raw = await git.raw(['for-each-ref', `refs/remotes/*/${currentBranch}`, '--format=%(refname)']);
-          const refs = raw.trim().split('\n').filter(Boolean);
-          if (refs.length > 0) {
-            resolvedRemoteRef = refs.find(r => r.includes('/origin/')) || refs[0];
-          }
-        } catch {
-          // No remote-tracking refs found — branch is local-only
-        }
-      }
-
-      // Published = has a remote-tracking ref we can compare against
-      const isPublished =
-        isRemoteTrackingBranch ||
-        Boolean(rawTracking) ||
-        Boolean(configuredTracking) ||
-        Boolean(resolvedRemoteRef);
-
-      // Return a stable tracking value even when the local branch has no configured upstream
-      // but a matching remote branch exists.
-      const tracking =
-        upstreamShort ||
-        rawTracking ||
-        configuredTracking ||
-        (resolvedRemoteRef ? resolvedRemoteRef.replace(/^refs\/remotes\//, "") : null);
-
-      // Always compute ahead/behind via rev-list for ground-truth accuracy.
-      // simple-git's status.ahead can be 0 when tracking info isn't fully resolved.
-      let ahead = status.ahead;
+      let tracking = rawTracking;
+      let resolvedRemoteRef: string | null = rawTracking ? `refs/remotes/${rawTracking}` : null;
+      let ahead  = status.ahead;
       let behind = status.behind;
 
-      let comparedWithUpstream = false;
-      if (upstreamFullRef) {
-        try {
-          const countsRaw = await git.raw(['rev-list', '--left-right', '--count', `HEAD...${upstreamFullRef}`]);
-          const [aheadRaw, behindRaw] = countsRaw.trim().split(/\s+/);
-          ahead = parseInt(aheadRaw || '0', 10) || 0;
-          behind = parseInt(behindRaw || '0', 10) || 0;
-          comparedWithUpstream = true;
-        } catch {
-          comparedWithUpstream = false;
-        }
-      }
+      const isRemoteTrackingBranch =
+        currentBranch?.startsWith('remotes/') || currentBranch?.startsWith('origin/');
 
-      if (!comparedWithUpstream && isPublished && resolvedRemoteRef && !isRemoteTrackingBranch) {
+      // When status.tracking is absent, look up the upstream in one for-each-ref call
+      // instead of the previous 4–6 separate rev-parse / config / show-ref subprocesses.
+      if (!rawTracking && currentBranch && !isRemoteTrackingBranch) {
         try {
-          const [aheadRaw, behindRaw] = await Promise.all([
-            git.raw(['rev-list', '--count', `${resolvedRemoteRef}..HEAD`]),
-            git.raw(['rev-list', '--count', `HEAD..${resolvedRemoteRef}`]),
+          // subprocess 2 (conditional): upstream short name + full ref from refs/heads/<branch>
+          const upRaw = await git.raw([
+            'for-each-ref', `refs/heads/${currentBranch}`,
+            '--format=%(upstream:short)\t%(upstream)',
           ]);
-          ahead = parseInt(aheadRaw.trim()) || 0;
-          behind = parseInt(behindRaw.trim()) || 0;
-        } catch {
-          // remote ref not available — fall back to status values
-        }
+          const parts  = upRaw.trim().split('\t');
+          const upShort = parts[0] || null;
+          const upFull  = parts[1] || null;
+          if (upShort) {
+            tracking = upShort;
+            resolvedRemoteRef = upFull || `refs/remotes/${upShort}`;
+          } else {
+            // No upstream configured — search for a matching remote tracking branch
+            // subprocess 3 (conditional): refs/remotes/*/<branch>
+            const refRaw = await git.raw([
+              'for-each-ref', `refs/remotes/*/${currentBranch}`, '--format=%(refname)',
+            ]);
+            const refs = refRaw.trim().split('\n').filter(Boolean);
+            if (refs.length > 0) {
+              resolvedRemoteRef = refs.find(r => r.includes('/origin/')) || refs[0];
+              tracking = resolvedRemoteRef!.replace(/^refs\/remotes\//, '');
+            }
+          }
+        } catch { /* no upstream — local-only branch */ }
       }
 
-      // Ground-truth count of commits reachable from HEAD that are not reachable from any
-      // fetched remote-tracking branch. This covers unpublished branches and cases where
-      // upstream metadata is incomplete.
-      let outgoingCount = 0;
+      const isPublished = isRemoteTrackingBranch || !!tracking;
+
+      // subprocess 4 (conditional): accurate ahead/behind via rev-list
+      if (resolvedRemoteRef && !isRemoteTrackingBranch) {
+        try {
+          const countsRaw = await git.raw([
+            'rev-list', '--left-right', '--count', `HEAD...${resolvedRemoteRef}`,
+          ]);
+          const [a, b] = countsRaw.trim().split(/\s+/);
+          ahead  = parseInt(a) || 0;
+          behind = parseInt(b) || 0;
+        } catch { /* fall back to status values */ }
+      }
+
+      // subprocess 5 (conditional): outgoing commits for unpublished branches
+      let outgoing = ahead > 0;
       if (!resolvedRemoteRef) {
         try {
-          const outgoingRaw = await git.raw(['rev-list', '--count', 'HEAD', '--not', '--remotes']);
-          outgoingCount = parseInt(outgoingRaw.trim()) || 0;
-        } catch {
-          outgoingCount = 0;
-        }
-
-        if (outgoingCount > ahead) {
-          ahead = outgoingCount;
-        }
-      }
-
-      // For unpublished branches, determine whether HEAD contains local commits that are not
-      // present on any fetched remote branch yet. This allows the UI to show "Publish" only
-      // after a new commit exists on the branch.
-      let outgoing = ahead > 0;
-      if (!resolvedRemoteRef && !outgoing && !isPublished && currentBranch && !isRemoteTrackingBranch) {
-        try {
-          const containingRemoteBranches = await git.raw(['branch', '-r', '--contains', 'HEAD']);
-          outgoing = containingRemoteBranches.trim().length === 0;
-        } catch {
-          outgoing = false;
-        }
+          const outRaw = await git.raw(['rev-list', '--count', 'HEAD', '--not', '--remotes']);
+          const outgoingCount = parseInt(outRaw.trim()) || 0;
+          if (outgoingCount > ahead) ahead = outgoingCount;
+          outgoing = outgoingCount > 0 || ahead > 0;
+        } catch { outgoing = false; }
       }
 
       return {
@@ -370,12 +379,12 @@ export function registerGitIpcHandlers() {
                 ? "untracked"
                 : "deleted",
         })),
-        staged: status.staged,
-        modified: status.modified,
-        untracked: status.not_added,
-        deleted: status.deleted,
+        staged:     status.staged,
+        modified:   status.modified,
+        untracked:  status.not_added,
+        deleted:    status.deleted,
         conflicted: status.conflicted,
-        published: isPublished,
+        published:  isPublished,
         tracking,
         current: currentBranch || status.current,
         ahead,
@@ -386,6 +395,7 @@ export function registerGitIpcHandlers() {
       console.error("Error getting git status:", error);
       return null;
     }
+    }); // end dedupeCall
   });
 
   // Stage files
@@ -396,8 +406,8 @@ export function registerGitIpcHandlers() {
     }
 
     try {
-      const git = simpleGit(activeProject);
-      const isRepo = await git.checkIsRepo();
+      const git = getSharedGit(activeProject);
+      const isRepo = await getCachedIsRepo(activeProject);
       if (!isRepo) {
         throw new Error("Not a git repository");
       }
@@ -441,8 +451,8 @@ export function registerGitIpcHandlers() {
     }
 
     try {
-      const git = simpleGit(activeProject);
-      const isRepo = await git.checkIsRepo();
+      const git = getSharedGit(activeProject);
+      const isRepo = await getCachedIsRepo(activeProject);
       if (!isRepo) {
         throw new Error("Not a git repository");
       }
@@ -462,8 +472,8 @@ export function registerGitIpcHandlers() {
     }
 
     try {
-      const git = simpleGit(activeProject);
-      const isRepo = await git.checkIsRepo();
+      const git = getSharedGit(activeProject);
+      const isRepo = await getCachedIsRepo(activeProject);
       if (!isRepo) {
         throw new Error("Not a git repository");
       }
@@ -483,8 +493,8 @@ export function registerGitIpcHandlers() {
     }
 
     try {
-      const git = simpleGit(activeProject);
-      const isRepo = await git.checkIsRepo();
+      const git = getSharedGit(activeProject);
+      const isRepo = await getCachedIsRepo(activeProject);
       if (!isRepo) {
         throw new Error("Not a git repository");
       }
@@ -556,13 +566,12 @@ export function registerGitIpcHandlers() {
   // Get commit history/log with graph information
   ipcMain.handle("git:getLog", async (event: IpcMainInvokeEvent, limit: number = 50) => {
     const activeProject = await getActiveProject(event);
-    if (!activeProject) {
-      return null;
-    }
-
+    if (!activeProject) return null;
+    try { await fs.promises.access(activeProject); } catch { return null; }
+    return dedupeCall(pendingLog, `${activeProject}:${limit}`, async () => {
     try {
-      const git = simpleGit(activeProject);
-      const isRepo = await git.checkIsRepo();
+      const git = simpleGit(activeProject, { timeout: { block: 10000 } });
+      const isRepo = await getCachedIsRepo(activeProject);
       if (!isRepo) {
         return null;
       }
@@ -596,6 +605,7 @@ export function registerGitIpcHandlers() {
       console.error("Error getting git log:", error);
       return null;
     }
+    }); // end dedupeCall
   });
 
   // Get files changed in a specific commit
@@ -606,8 +616,8 @@ export function registerGitIpcHandlers() {
     }
 
     try {
-      const git = simpleGit(activeProject);
-      const isRepo = await git.checkIsRepo();
+      const git = getSharedGit(activeProject);
+      const isRepo = await getCachedIsRepo(activeProject);
       if (!isRepo) {
         return [];
       }
@@ -649,8 +659,8 @@ export function registerGitIpcHandlers() {
     }
 
     try {
-      const git = simpleGit(activeProject);
-      const isRepo = await git.checkIsRepo();
+      const git = getSharedGit(activeProject);
+      const isRepo = await getCachedIsRepo(activeProject);
       if (!isRepo) {
         return null;
       }
@@ -669,12 +679,13 @@ export function registerGitIpcHandlers() {
     }
 
     try {
-      const git = simpleGit(activeProject);
-      const isRepo = await git.checkIsRepo();
+      const git = getSharedGit(activeProject);
+      const isRepo = await getCachedIsRepo(activeProject);
       if (!isRepo) {
         throw new Error("Not a git repository");
       }
       await git.addRemote("origin", remoteUrl);
+      invalidateRemoteUrlCache(activeProject);
     } catch (error) {
       console.error("Error adding git remote:", error);
       throw error;
@@ -689,8 +700,8 @@ export function registerGitIpcHandlers() {
     }
 
     try {
-      const git = simpleGit(activeProject);
-      const isRepo = await git.checkIsRepo();
+      const git = getSharedGit(activeProject);
+      const isRepo = await getCachedIsRepo(activeProject);
       if (!isRepo) {
         throw new Error("Not a git repository");
       }
@@ -735,30 +746,40 @@ export function registerGitIpcHandlers() {
     }
   });
 
-  // Get the fetch URL of the tracked remote (fallback: origin, then first remote)
+  // Get the fetch URL of the tracked remote (fallback: origin, then first remote).
+  // Cached for REMOTE_URL_TTL — remote URLs rarely change and this IPC fires on
+  // every panel render, causing subprocess spam on non-git projects otherwise.
   ipcMain.handle("git:getRemoteUrl", async (event: IpcMainInvokeEvent) => {
     const activeProject = await getActiveProject(event);
     if (!activeProject) return null;
+
+    const cached = remoteUrlCache.get(activeProject);
+    if (cached && Date.now() - cached.timestamp < REMOTE_URL_TTL) return cached.url;
+
     try {
-      const git = simpleGit(activeProject);
-      const isRepo = await git.checkIsRepo();
-      if (!isRepo) return null;
-      const status = await git.status();
-      const remotes = await git.getRemotes(true);
+      if (!await getCachedIsRepo(activeProject)) {
+        remoteUrlCache.set(activeProject, { url: null, timestamp: Date.now() });
+        return null;
+      }
+      const git = getSharedGit(activeProject);
+      const [status, remotes] = await Promise.all([git.status(), git.getRemotes(true)]);
       const trackedRemote = trackingToRemoteName(status.tracking || null);
+      let url: string | null = null;
       if (trackedRemote) {
         const tracked = remotes.find((r) => r.name === trackedRemote);
-        if (tracked?.refs?.fetch || tracked?.refs?.push) {
-          return tracked.refs.fetch || tracked.refs.push || null;
-        }
+        url = tracked?.refs?.fetch || tracked?.refs?.push || null;
       }
-      const origin = remotes.find((r) => r.name === "origin");
-      if (origin?.refs?.fetch || origin?.refs?.push) {
-        return origin.refs.fetch || origin.refs.push || null;
+      if (!url) {
+        const origin = remotes.find((r) => r.name === 'origin');
+        url = origin?.refs?.fetch || origin?.refs?.push || null;
       }
-      const first = remotes[0];
-      return first?.refs?.fetch || first?.refs?.push || null;
+      if (!url && remotes[0]) {
+        url = remotes[0]?.refs?.fetch || remotes[0]?.refs?.push || null;
+      }
+      remoteUrlCache.set(activeProject, { url, timestamp: Date.now() });
+      return url;
     } catch {
+      remoteUrlCache.set(activeProject, { url: null, timestamp: Date.now() });
       return null;
     }
   });
@@ -768,10 +789,11 @@ export function registerGitIpcHandlers() {
     const activeProject = await getActiveProject(event);
     if (!activeProject) throw new Error("No active project selected.");
     try {
-      const git = simpleGit(activeProject);
-      const isRepo = await git.checkIsRepo();
+      const git = getSharedGit(activeProject);
+      const isRepo = await getCachedIsRepo(activeProject);
       if (!isRepo) throw new Error("Not a git repository");
       await git.removeRemote("origin");
+      invalidateRemoteUrlCache(activeProject);
       return true;
     } catch (error) {
       console.error("Error removing remote:", error);
@@ -784,8 +806,8 @@ export function registerGitIpcHandlers() {
     const activeProject = await getActiveProject(event);
     if (!activeProject) throw new Error("No active project selected.");
     try {
-      const git = simpleGit(activeProject);
-      const isRepo = await git.checkIsRepo();
+      const git = getSharedGit(activeProject);
+      const isRepo = await getCachedIsRepo(activeProject);
       if (!isRepo) throw new Error("Not a git repository");
       const remotes = await git.getRemotes(false);
       if (remotes.some((r) => r.name === "origin")) {
@@ -793,6 +815,7 @@ export function registerGitIpcHandlers() {
       } else {
         await git.addRemote("origin", remoteUrl);
       }
+      invalidateRemoteUrlCache(activeProject);
       return true;
     } catch (error) {
       console.error("Error setting remote URL:", error);
@@ -806,8 +829,11 @@ export function registerGitIpcHandlers() {
     const activeProject = await getActiveProject(event);
     if (!activeProject) return null;
 
-    const git = simpleGit(activeProject);
-    const isRepo = await git.checkIsRepo();
+    // Guard: directory must exist before attempting git operations
+    try { await fs.promises.access(activeProject); } catch { return null; }
+    return dedupeCall(pendingFetch, activeProject, async () => {
+    const git = getSharedGit(activeProject);
+    const isRepo = await getCachedIsRepo(activeProject);
     if (!isRepo) return null;
     const remotes = await git.getRemotes(false);
     if (remotes.length === 0) {
@@ -824,14 +850,15 @@ export function registerGitIpcHandlers() {
     }
     invalidateGitCache(activeProject);
     return true;
+    }); // end dedupeCall git:fetch
   });
 
   // Stash current changes (with optional message)
   ipcMain.handle("git:stash", async (event: IpcMainInvokeEvent, message?: string) => {
     const activeProject = await getActiveProject(event);
     if (!activeProject) throw new Error("No active project selected.");
-    const git = simpleGit(activeProject);
-    const isRepo = await git.checkIsRepo();
+    const git = getSharedGit(activeProject);
+    const isRepo = await getCachedIsRepo(activeProject);
     if (!isRepo) throw new Error("Not a git repository");
     const args = message ? ['push', '-m', message] : ['push'];
     await git.raw(['stash', ...args]);
@@ -842,26 +869,29 @@ export function registerGitIpcHandlers() {
   ipcMain.handle("git:stashList", async (event: IpcMainInvokeEvent) => {
     const activeProject = await getActiveProject(event);
     if (!activeProject) return [];
-    try {
-      const git = simpleGit(activeProject);
-      const isRepo = await git.checkIsRepo();
-      if (!isRepo) return [];
-      const raw = await git.raw(['stash', 'list', '--format=%gd|%s|%cr']);
-      return raw.trim().split('\n').filter(Boolean).map((line, index) => {
-        const [ref, subject, date] = line.split('|');
-        return { index, ref: ref?.trim(), message: subject?.trim(), date: date?.trim() };
-      });
-    } catch {
-      return [];
-    }
+    return dedupeCall(pendingStash, activeProject, async () => {
+      try {
+        const git = getSharedGit(activeProject);
+        const isRepo = await getCachedIsRepo(activeProject);
+        if (!isRepo) return [];
+        const raw = await git.raw(['stash', 'list', '--format=%gd|%s|%cr']);
+        const entries = raw.trim().split('\n').filter(Boolean).map((line, index) => {
+          const [ref, subject, date] = line.split('|');
+          return { index, ref: ref?.trim(), message: subject?.trim(), date: date?.trim() };
+        });
+        return entries;
+      } catch {
+        return [];
+      }
+    });
   });
 
   // Pop a stash by index
   ipcMain.handle("git:stashPop", async (event: IpcMainInvokeEvent, index: number) => {
     const activeProject = await getActiveProject(event);
     if (!activeProject) throw new Error("No active project selected.");
-    const git = simpleGit(activeProject);
-    const isRepo = await git.checkIsRepo();
+    const git = getSharedGit(activeProject);
+    const isRepo = await getCachedIsRepo(activeProject);
     if (!isRepo) throw new Error("Not a git repository");
     await git.raw(['stash', 'pop', `stash@{${index}}`]);
     return true;
@@ -976,27 +1006,30 @@ export function registerGitIpcHandlers() {
   ipcMain.handle("git:getConflicts", async (event: IpcMainInvokeEvent) => {
     const activeProject = await getActiveProject(event);
     if (!activeProject) return [];
-    const git = simpleGit(activeProject);
-    const isRepo = await git.checkIsRepo();
-    if (!isRepo) return [];
+    try { await fs.promises.access(activeProject); } catch { return []; }
+    return dedupeCall(pendingConflicts, activeProject, async () => {
+      const git = getSharedGit(activeProject);
+      const isRepo = await getCachedIsRepo(activeProject);
+      if (!isRepo) return [];
 
-    const status = await git.status();
-    const conflicted = status.conflicted;
+      const status = await git.status();
+      const conflicted = status.conflicted;
 
-    const conflicts = await Promise.all(
-      conflicted.map(async (file) => {
-        try {
-          const filePath = path.join(activeProject, file);
-          const content = fs.readFileSync(filePath, 'utf8');
-          const sections = parseConflictSections(content);
-          return { file, sections, hasConflict: sections.length > 0 };
-        } catch {
-          return { file, sections: [], hasConflict: false };
-        }
-      })
-    );
+      const conflicts = await Promise.all(
+        conflicted.map(async (file) => {
+          try {
+            const filePath = path.join(activeProject, file);
+            const content = await fs.promises.readFile(filePath, 'utf8');
+            const sections = parseConflictSections(content);
+            return { file, sections, hasConflict: sections.length > 0 };
+          } catch {
+            return { file, sections: [], hasConflict: false };
+          }
+        })
+      );
 
-    return conflicts;
+      return conflicts;
+    });
   });
 
   ipcMain.handle(
@@ -1011,13 +1044,13 @@ export function registerGitIpcHandlers() {
       if (!activeProject) throw new Error("No active project selected.");
 
       const filePath = path.join(activeProject, file);
-      const content = fs.readFileSync(filePath, 'utf8');
+      const content = await fs.promises.readFile(filePath, 'utf8');
       const resolved = resolveConflictContent(content, resolution, sectionIndex);
-      fs.writeFileSync(filePath, resolved, 'utf8');
+      await fs.promises.writeFile(filePath, resolved, 'utf8');
 
       // If no conflict markers remain, auto-stage the file
       if (!resolved.includes('<<<<<<<')) {
-        const git = simpleGit(activeProject);
+        const git = getSharedGit(activeProject);
         await git.add(file);
       }
 
@@ -1029,7 +1062,7 @@ export function registerGitIpcHandlers() {
     const activeProject = await getActiveProject(event);
     if (!activeProject) throw new Error("No active project selected.");
     const filePath = path.join(activeProject, file);
-    return fs.readFileSync(filePath, 'utf8');
+    return fs.promises.readFile(filePath, 'utf8');
   });
 
   // Write resolved content to disk and stage the file
@@ -1038,7 +1071,7 @@ export function registerGitIpcHandlers() {
     if (!activeProject) throw new Error("No active project selected.");
     const filePath = path.join(activeProject, file);
     fs.writeFileSync(filePath, content, 'utf8');
-    const git = simpleGit(activeProject);
+    const git = getSharedGit(activeProject);
     await git.add(file);
     invalidateGitCache(activeProject);
     return { success: true };
@@ -1048,8 +1081,8 @@ export function registerGitIpcHandlers() {
   ipcMain.handle("git:uncommit", async (event: IpcMainInvokeEvent) => {
     const activeProject = await getActiveProject(event);
     if (!activeProject) throw new Error("No active project selected.");
-    const git = simpleGit(activeProject);
-    const isRepo = await git.checkIsRepo();
+    const git = getSharedGit(activeProject);
+    const isRepo = await getCachedIsRepo(activeProject);
     if (!isRepo) throw new Error("Not a git repository");
     await git.reset(['--soft', 'HEAD~1']);
     invalidateGitCache(activeProject);
@@ -1063,8 +1096,8 @@ export function registerGitIpcHandlers() {
     }
 
     try {
-      const git = simpleGit(activeProject);
-      const isRepo = await git.checkIsRepo();
+      const git = getSharedGit(activeProject);
+      const isRepo = await getCachedIsRepo(activeProject);
       if (!isRepo) {
         throw new Error("Not a git repository");
       }

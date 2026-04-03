@@ -1,210 +1,105 @@
-import chokidar from "chokidar";
-import path from "node:path";
-import eventBus from "./eventBus"; // your singleton event bus
-
-// Store multiple watchers keyed by project path or window ID
-const fileWatchers = new Map<string, chokidar.FSWatcher>();
-
-// Simple debounce utility to batch rapid Git changes.
-function debounce(func: (...args: any[]) => void, wait: number) {
-  let timeout: NodeJS.Timeout | null = null;
-  return (...args: any[]) => {
-    if (timeout) clearTimeout(timeout);
-    timeout = setTimeout(() => func(...args), wait);
-  };
-}
-
-
-function createDebouncedGitEmit(projectPath: string) {
-  return debounce((data: { path: string }) => {
-    eventBus.emitEvent("git:changed", { ...data, project: projectPath });
-  }, 200);
-}
-
 /**
- * Update the file watcher for a specific project/window.
- * Supports multiple windows watching different directories simultaneously.
- * 
- * @param activeProject - The project directory to watch
- * @param watcherId - Optional unique identifier (e.g., windowId or project path)
+ * fileWatcher.ts — main-process side
+ *
+ * Spawns fileWatcher.worker.ts in an Electron UtilityProcess so chokidar's
+ * initial directory scan runs in a separate OS process and never stalls the
+ * main-process event loop (tabs, IPC, window creation all stay responsive).
+ *
+ * All public exports keep the same signature as before — callers don't change.
  */
-export async function updateFileWatcher(
-  activeProject: string,
-  watcherId?: string
-) {
-  const id = watcherId || activeProject;
-  if (fileWatchers.has(id)) {
-    try {
-      await fileWatchers.get(id)?.close();
-      fileWatchers.delete(id);
-    } catch (error) {
-    }
-  }
 
-  if (!activeProject) {
-    console.log('[FileWatcher] No active project. Skipping watcher initialization.');
-    return;
-  }
+import path from "node:path";
+import { utilityProcess } from "electron";
+import type { UtilityProcess } from "electron";
+import eventBus from "./eventBus";
+import { invalidateGitCache } from "./git";
+import { logger } from "./logger";
 
-  const pathsToWatch = [
-    // Watch .env files (including .env.local, .env.production, etc.)
-    path.join(activeProject, ".env"),
-    path.join(activeProject, ".env.*"),
+// ── Process lifecycle ─────────────────────────────────────────────────────────
+let watcherProc: UtilityProcess | null = null;
 
-    // Watch Git files
-    path.join(activeProject, ".git/HEAD"),
-    path.join(activeProject, ".git/index"),
-    path.join(activeProject, ".git/refs/**/*"),
+function getWorkerPath(): string {
+  // Vite builds the worker to the same directory as main.js (.vite/build/)
+  return path.join(__dirname, "fileWatcher.worker.js");
+}
 
-    // Watch .void files
-    path.join(activeProject, "**/*.void"),
+function spawnWorker() {
+  if (watcherProc) return;
 
-    // Watch the entire directory for add/delete events
-    // This is necessary to catch new files and folders
-    activeProject,
-  ];
-
-
-  const watcher = chokidar.watch(pathsToWatch, {
-    persistent: true,
-    ignoreInitial: true,
-    depth: 99,
-    followSymlinks: false,
-    usePolling: false,
-    interval: 100,
-    ignored: (filePath: string, stats?: any) => {
-      if (/node_modules/.test(filePath)) {
-        return true;
-      }
-      if (/(dist|build|\.cache|\.next|\.nuxt)/.test(filePath)) {
-        return true;
-      }
-      return false;
-    },
-    awaitWriteFinish: {
-      stabilityThreshold: 100,
-      pollInterval: 50,
-    },
+  watcherProc = utilityProcess.fork(getWorkerPath(), [], {
+    serviceName: "VoidenFileWatcher",
   });
 
-  // Create debounced git emit for this watcher
-  const emitGitChangedDebounced = createDebouncedGitEmit(activeProject);
+  watcherProc.on("message", (msg: any) => {
+    if (!msg || typeof msg !== "object") return;
 
-  // Helper functions
-  const isEnvFile = (filePath: string) => {
-    const basename = path.basename(filePath);
-    return basename === ".env" || basename.startsWith(".env.");
-  };
-
-  const isGitRelated = (filePath: string) =>
-    filePath.includes(`${path.sep}.git${path.sep}`);
-
-  const isVoidFile = (filePath: string) =>
-    filePath.endsWith(".void");
-
-  watcher
-    .on('ready', () => {
-      const watched = watcher.getWatched();
-    })
-    .on("add", (filePath: string) => {
-      if (isGitRelated(filePath)) {
-        emitGitChangedDebounced({ path: filePath });
+    if (msg.type === "event") {
+      const { channel, data } = msg;
+      // git:changed requires a cache bust before the event reaches the renderer
+      if (channel === "git:changed" && data?.project) {
+        invalidateGitCache(data.project);
+      }
+      eventBus.emitEvent(channel, data);
+    } else if (msg.type === "log") {
+      const meta = msg.meta ?? {};
+      if (msg.level === "warn") {
+        logger.warn("system", msg.message, meta);
       } else {
-        eventBus.emitEvent("file:new", {
-          path: filePath,
-          project: activeProject,
-          watcherId: id
-        });
+        logger.info("system", msg.message, meta);
       }
-    })
-    .on("addDir", (dirPath: string) => {
-      if (isGitRelated(dirPath)) {
-        emitGitChangedDebounced({ path: dirPath });
-      } else {
-        eventBus.emitEvent("file:new", {
-          path: dirPath,
-          project: activeProject,
-          watcherId: id
-        });
-      }
-    })
-    .on("change", (filePath: string) => {
-      if (isVoidFile(filePath)) {
-        eventBus.emitEvent("apy:changed", {
-          path: filePath,
-          project: activeProject,
-          watcherId: id
-        });
-      } else if (isEnvFile(filePath)) {
-        eventBus.emitEvent("env:changed", {
-          path: filePath,
-          project: activeProject,
-          watcherId: id
-        });
-      } else if (isGitRelated(filePath)) {
-        emitGitChangedDebounced({ path: filePath });
-      }
-    })
-    .on("unlink", (filePath: string) => {
-      if (isGitRelated(filePath)) {
-        emitGitChangedDebounced({ path: filePath });
-      } else {
-        eventBus.emitEvent("file:delete", {
-          path: filePath,
-          project: activeProject,
-          watcherId: id
-        });
-      }
-    })
-    .on("unlinkDir", (dirPath: string) => {
-      if (isGitRelated(dirPath)) {
-        emitGitChangedDebounced({ path: dirPath });
-      } else {
-        eventBus.emitEvent("file:delete", {
-          path: dirPath,
-          project: activeProject,
-          watcherId: id
-        });
-      }
-    })
-    .on("error", (error) => {
-      eventBus.emitEvent("watcher:error", {
-        error: error.message,
-        project: activeProject,
-        watcherId: id
-      });
-    });
-
-  // Store the watcher
-  fileWatchers.set(id, watcher);
-}
-
-
-/**
- * Remove a specific file watcher
- */
-export async function removeFileWatcher(watcherId: string) {
-  if (fileWatchers.has(watcherId)) {
-    try {
-      await fileWatchers.get(watcherId)?.close();
-      fileWatchers.delete(watcherId);
-    } catch (error) {
-      console.error('[FileWatcher] Error removing watcher:', error);
     }
-  }
+  });
+
+  watcherProc.on("exit", (code) => {
+    logger.warn("system", `FileWatcher process exited (code ${code}) — will respawn on next watch call`);
+    watcherProc = null;
+  });
 }
 
+/** Send a message to the worker, spawning it first if needed. */
+function send(msg: object) {
+  spawnWorker();
+  watcherProc?.postMessage(msg);
+}
+
+// ── Public API (same signatures as before) ────────────────────────────────────
 
 /**
- * Clean up all file watchers
+ * Start (or restart) watching a project directory.
+ * Safe to call multiple times — the worker stops any previous watcher for
+ * the same id before starting a new one.
  */
-export async function closeAllWatchers() {
-  const closePromises = Array.from(fileWatchers.values()).map(watcher =>
-    watcher.close().catch(err => console.error('[FileWatcher] Close error:', err))
-  );
-  await Promise.all(closePromises);
-  fileWatchers.clear();
+export async function updateFileWatcher(activeProject: string, watcherId?: string) {
+  const id = watcherId ?? activeProject;
+  if (!activeProject) {
+    send({ type: "unwatch", watcherId: id });
+    return;
+  }
+  send({ type: "watch", projectPath: activeProject, watcherId: id });
 }
 
+/** Stop watching a specific watcher by id. */
+export async function removeFileWatcher(watcherId: string) {
+  send({ type: "unwatch", watcherId });
+}
 
+/** Stop all watchers and let the worker process idle. */
+export async function closeAllWatchers() {
+  send({ type: "closeAll" });
+}
 
+/**
+ * Suppress file:new events for a path while a clone is in progress.
+ * Called synchronously — the message is queued before any clone events arrive.
+ */
+export function setCloning(dir: string, active: boolean) {
+  send({ type: "setCloning", path: dir, active });
+}
+
+/**
+ * Suppress unlink/unlinkDir events for a path while a delete is in progress.
+ * Called synchronously — the message is queued before any delete events arrive.
+ */
+export function setDeleting(dir: string, active: boolean) {
+  send({ type: "setDeleting", path: dir, active });
+}

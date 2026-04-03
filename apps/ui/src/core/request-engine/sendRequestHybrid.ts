@@ -227,7 +227,9 @@ async function convertToRestApiRequestState(data: Request): Promise<RestApiReque
     binary: data.binary,
     authProfile: undefined, // TODO: Auth profile reference
     preRequestResult: data.preRequestResult,
-    metadata: {},
+    metadata: {
+      ...(data.options?.follow_redirects === 'false' ? { follow_redirects: false } : {}),
+    },
   };
 
   return result;
@@ -290,9 +292,11 @@ export async function sendRequestHybrid(
 
   try {
     let requestState = request;
+    console.log('[sendRequestHybrid] input method:', request.method, 'protocolType:', request.protocolType);
     // Convert Request to RestApiRequestState
     if (request.protocolType === 'rest') {
       requestState =await  convertToRestApiRequestState(request);
+      console.log('[sendRequestHybrid] after convert method:', requestState.method);
     }
 
     const url = requestState.url.toLowerCase();
@@ -353,6 +357,9 @@ export async function sendRequestHybrid(
     // ========================================
     // ELECTRON PROCESS - Stages 3, 4, 6, 7
     // ========================================
+
+    // Debug: log method before sending to Electron
+    console.log('[sendRequestHybrid] method before Electron:', requestState.method, 'url:', requestState.url);
 
     // Send to Electron for secure processing
     const electronResponse = await window.electron.request.sendSecure(
@@ -449,7 +456,7 @@ export async function sendRequestHybrid(
       const state= await window.electron?.state.get();
       const path = state.activeDirectory||'';
       let editorJson:JSONContent|undefined  = editor?.getJSON();
-      editorJson = await expandLinkedBlocksInDoc(editorJson);
+      editorJson = await expandLinkedBlocksInDoc(editorJson, { forceRefresh: true });
       const captureArray = await getRuntimeVariablesMap(editorJson,undefined);
       if(captureArray||[].length>0){
         await saveRuntimeVariables(requestState, {
@@ -502,7 +509,7 @@ export async function sendRequestHybrid(
     const state = await window.electron?.state.get();
     const path = state.activeDirectory || '';
     let editorJson: JSONContent | undefined = editor?.getJSON();
-    editorJson = await expandLinkedBlocksInDoc(editorJson);
+    editorJson = await expandLinkedBlocksInDoc(editorJson, { forceRefresh: true });
     const captureArray = await getRuntimeVariablesMap(editorJson, undefined);
     if (captureArray || [].length > 0) {
       await saveRuntimeVariables(requestState, responseState, captureArray, path);

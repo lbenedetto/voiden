@@ -25,6 +25,12 @@ import { registerPythonScriptIpcHandler } from "./main/ipc/pythonScript";
 import { registerNodeScriptIpcHandler } from "./main/ipc/nodeScript";
 import { loadMainProcessExtensions, unloadMainProcessExtensions } from "./main/extensionLoader";
 import { recomposeAndInstall } from "./main/skillsInstaller";
+import { setupLoggerIPC, logger } from "./main/logger";
+import { initializeIntegratedLogging } from "./main/loggerIntegration";
+import { patchIpcMainHandle, setupProcessTrackerIPC } from "./main/processTracker";
+
+// Patch ipcMain.handle BEFORE any side-effect imports that register handlers
+patchIpcMainHandle();
 
 // Import side-effect modules
 import "./main/terminal";
@@ -33,6 +39,16 @@ import "./main/voiden";
 import "./main/env";
 import "./main/utils";
 import "./main/variables";
+
+// On macOS, "Open With" / double-click fires open-file before the app is ready.
+// Queue those paths here and drain them after initial windows are loaded.
+const pendingOpenFiles: string[] = [];
+if (process.platform === "darwin") {
+  app.on("open-file", (event, filePath) => {
+    event.preventDefault();
+    pendingOpenFiles.push(filePath);
+  });
+}
 
 const gotTheLock = app.requestSingleInstanceLock({ args: getCliArguments() });
 
@@ -91,6 +107,7 @@ app.on("web-contents-created", (_, contents) => {
 
 // App ready event
 app.on("ready", async () => {
+  const appReadyTime = Date.now();
   // Create splash screen - will be destroyed by createWindow
   const splashWindow = new BrowserWindow({
     width: 400,
@@ -142,6 +159,12 @@ app.on("ready", async () => {
     windowManager.closeWindowFromSender(event.sender);
   })
 
+  // Initialize logger system
+  setupLoggerIPC();
+  setupProcessTrackerIPC();
+  initializeIntegratedLogging();
+  logger.info('system', 'STARTUP: app:ready fired — registering IPC handlers', { t: appReadyTime });
+
   registerSettingsIpc();
   registerFontsIpc();
   registerUpdateIpcHandlers();
@@ -166,17 +189,32 @@ app.on("ready", async () => {
   const updateChannel = settings.updates?.channel || "stable";
   initializeUpdates(updateChannel);
 
+  logger.info('system', 'STARTUP: all IPC handlers registered — creating windows');
+
   // Create main window (after IPC handlers are ready)
   const cliArgs = getCliArguments();
-  if (cliArgs.length > 0) {
-    await handleCliArguments(cliArgs);
-    setupMacOSFileHandler(windowManager.browserWindow as BrowserWindow);
+  // On macOS, also include any open-file paths that arrived before ready
+  const allInitialArgs = [...cliArgs, ...pendingOpenFiles];
+  pendingOpenFiles.length = 0;
+
+  if (allInitialArgs.length > 0) {
+    await handleCliArguments(allInitialArgs);
     if (windowManager.getAllWindows().length === 0) {
       splashWindow?.destroy();
     }
   } else {
     await windowManager.loadAllWindows();
   }
+  logger.perf('system', 'STARTUP: windows loaded', Date.now() - appReadyTime, {
+    note: 'total time from app:ready to first window visible — if >5000ms check FileWatcher:ready and initializeState phases',
+  });
+
+  // Set up the ongoing macOS "Open With" handler (remove the pre-ready queuing
+  // listener first so we don't accumulate duplicate listeners).
+  if (process.platform === "darwin") {
+    app.removeAllListeners("open-file");
+  }
+  setupMacOSFileHandler();
 
   // Load main-process extensions after state is initialized
   try {
@@ -205,8 +243,14 @@ app.on("window-all-closed", async () => {
 });
 
 app.on("activate", async () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    await windowManager.loadAllWindows()
+  const windows = BrowserWindow.getAllWindows();
+  // On macOS, windows are hidden instead of destroyed when the user clicks
+  // the red X. Re-show any hidden windows on dock-icon click.
+  const hiddenWindows = windows.filter(w => !w.isDestroyed() && !w.isVisible());
+  if (hiddenWindows.length > 0) {
+    hiddenWindows.forEach(w => { w.show(); w.focus(); });
+  } else if (windows.length === 0) {
+    await windowManager.loadAllWindows();
   }
 });
 

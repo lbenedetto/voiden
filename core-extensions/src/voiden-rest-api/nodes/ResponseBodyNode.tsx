@@ -61,12 +61,30 @@ type ViewMode = "preview" | "raw";
 export const createResponseBodyNode = (
   NodeViewWrapper: any,
   CodeEditor: any,
-  useParentResponseDoc: (editor: any, getPos: () => number) => { openNodes: string[]; parentPos: number | null }
+  useParentResponseDoc: (editor: any, getPos: () => number) => { openNodes: string[]; parentPos: number | null },
+  useResponseBodyHeight: () => { height: number | null; setHeight: (h: number) => void }
 ) => {
   const ResponseBodyComponent = ({ node, getPos, editor }: any) => {
     const { body, contentType, downloadFilename } = node.attrs as ResponseBodyAttrs;
     const [viewMode, setViewMode] = React.useState<ViewMode>("preview");
     const [isPrettified, setIsPrettified] = React.useState(false);
+
+    // Persisted height from the response store (per-tab)
+    const { height: persistedHeight, setHeight: persistHeight } = useResponseBodyHeight();
+
+    // Resize state for the response body code editor (must be at top level)
+    const defaultHeight = Math.min(window.innerHeight * 0.6, 500);
+    const [editorHeight, setEditorHeight] = React.useState(persistedHeight ?? defaultHeight);
+    const isResizingRef = React.useRef(false);
+    const startYRef = React.useRef(0);
+    const startHeightRef = React.useRef(0);
+
+    // Sync local height when persisted height changes (e.g. tab switch)
+    React.useEffect(() => {
+      if (persistedHeight != null) {
+        setEditorHeight(persistedHeight);
+      }
+    }, [persistedHeight]);
 
     // Read parent's openNodes state - automatically updates when parent changes
     const { openNodes } = useParentResponseDoc(editor, getPos);
@@ -341,9 +359,11 @@ export const createResponseBodyNode = (
           return <div className="p-4 text-comment text-sm">Failed to load PDF.</div>;
         }
 
+        const pdfViewerUrl = `${pdfUrl}${pdfUrl.includes("#") ? "&" : "#"}toolbar=0&navpanes=0&scrollbar=0`;
+
         return (
           <div className="bg-bg" style={{ height: '500px' }}>
-            <embed src={pdfUrl} type="application/pdf" className="w-full h-full" />
+            <embed src={pdfViewerUrl} type="application/pdf" className="w-full h-full" />
           </div>
         );
       }
@@ -442,17 +462,46 @@ export const createResponseBodyNode = (
       }
 
 
-      const viewportMaxHeight = window.innerHeight * 0.6;
-      const maxHeight = Math.min(viewportMaxHeight, 500);
+      const handleResizeStart = (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        isResizingRef.current = true;
+        startYRef.current = e.clientY;
+        startHeightRef.current = editorHeight;
+
+        let latestHeight = startHeightRef.current;
+
+        const onMouseMove = (ev: MouseEvent) => {
+          if (!isResizingRef.current) return;
+          const delta = ev.clientY - startYRef.current;
+          latestHeight = Math.max(100, startHeightRef.current + delta);
+          setEditorHeight(latestHeight);
+        };
+
+        const onMouseUp = () => {
+          isResizingRef.current = false;
+          persistHeight(latestHeight);
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onMouseUp);
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+        };
+
+        document.body.style.cursor = 'row-resize';
+        document.body.style.userSelect = 'none';
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+      };
 
       return (
         <div style={{ height: 'auto', overflow: 'visible' }}>
           <style>{`
             .response-body-editor .cm-editor {
-              max-height: ${maxHeight}px !important;
+              height: ${editorHeight}px !important;
+              max-height: none !important;
             }
             .response-body-editor .cm-scroller {
-              max-height: ${maxHeight}px !important;
+              max-height: none !important;
               overflow-y: auto !important;
             }
             /* Ensure find panel is visible and not clipped */
@@ -470,6 +519,30 @@ export const createResponseBodyNode = (
               value={displayValue}
               showReplace={false}
             />
+          </div>
+          {/* Resize handle */}
+          <div
+            onMouseDown={handleResizeStart}
+            style={{
+              height: '4px',
+              cursor: 'row-resize',
+              background: 'transparent',
+              position: 'relative',
+              zIndex: 5,
+            }}
+            title="Drag to resize"
+          >
+            <div style={{
+              position: 'absolute',
+              left: '50%',
+              top: '50%',
+              transform: 'translate(-50%, -50%)',
+              width: '32px',
+              height: '3px',
+              borderRadius: '2px',
+              background: 'var(--comment)',
+              opacity: 0.4,
+            }} />
           </div>
         </div>
       );

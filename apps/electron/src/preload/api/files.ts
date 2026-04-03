@@ -5,6 +5,9 @@ export const filesApi = {
   getFiles: (filePaths: string[], isExternal?: boolean) =>
     ipcRenderer.invoke("files:getFiles", filePaths, isExternal),
   tree: (directory: string) => ipcRenderer.invoke("files:tree", directory),
+  expandDir: (dirPath: string) => ipcRenderer.invoke("files:expandDir", dirPath),
+  flatList: (rootDir: string, query?: string): Promise<{ name: string; path: string }[]> =>
+    ipcRenderer.invoke("files:flatList", rootDir, query),
   read: (path: string) => ipcRenderer.invoke("files:read", path),
   write: (path: string, content: string, tabId?: string) =>
     ipcRenderer.invoke("files:write", path, content, tabId),
@@ -95,5 +98,13 @@ export const filesApi = {
     const handler = (_: unknown, filePaths: string[]) => callback(filePaths);
     ipcRenderer.on("files:referencesUpdated", handler);
     return () => ipcRenderer.removeListener("files:referencesUpdated", handler);
+  },
+  onSaveUnsavedForPaths: (callback: (requestId: string, paths: string[]) => void) => {
+    const handler = (_: unknown, requestId: string, paths: string[]) => callback(requestId, paths);
+    ipcRenderer.on("files:saveUnsavedForPaths", handler);
+    return () => ipcRenderer.removeListener("files:saveUnsavedForPaths", handler);
+  },
+  acknowledgeUnsavedSaved: (requestId: string) => {
+    ipcRenderer.send(`files:unsavedSavedAck:${requestId}`);
   },
 };

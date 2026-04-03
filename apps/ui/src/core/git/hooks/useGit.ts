@@ -3,15 +3,37 @@ import { useEffect } from "react";
 import { useGetAppState } from "@/core/state/hooks";
 import { reloadVoidenEditor } from "@/core/editors/voiden/VoidenEditor";
 
+/**
+ * Checks once whether the active directory is a git repository.
+ * Cached indefinitely until the active directory changes.
+ * All git polling hooks gate on this so they don't run when there's no repo
+ * (e.g. a parent folder that contains repos as sub-folders).
+ */
+export const useIsGitRepo = () => {
+  const { data: appState } = useGetAppState();
+  const activeDirectory = appState?.activeDirectory;
+  return useQuery({
+    queryKey: ["git:isRepo", activeDirectory],
+    queryFn: async () => {
+      const root = await window.electron?.git.getRepoRoot();
+      return !!root;
+    },
+    enabled: !!activeDirectory,
+    staleTime: Infinity,
+    gcTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+};
+
 export const useGetGitBranches = () => {
+  const { data: isGitRepo } = useIsGitRepo();
   return useQuery({
     queryKey: ["git:branches"],
     queryFn: async () => {
-      // Assumes window.electron.git.branches calls your IPC handler "git:getBranches"
       const response = await window.electron?.git.getBranches();
-
       return response;
     },
+    enabled: !!isGitRepo,
   });
 };
 
@@ -60,13 +82,10 @@ export const useCheckoutBranch = () => {
       return window.electron?.git.checkout(projectPath, branch);
     },
     onSuccess: async () => {
-      // Invalidate the git branches query to refresh the list (and active branch) after a checkout.
       queryClient.invalidateQueries({ queryKey: ["git:branches"] });
-      queryClient.invalidateQueries({ queryKey: ["files:tree", activeDirectory] });
+      queryClient.invalidateQueries({ queryKey: ["git:status"] });
       queryClient.invalidateQueries({ queryKey: ["git:log"] });
-
-      // Don't reload tabs here - the git:changed file watcher event will handle it
-      // This prevents double reloading
+      queryClient.invalidateQueries({ queryKey: ["files:tree", activeDirectory] });
     },
   });
 };
@@ -143,12 +162,16 @@ export const useGetFileAtBranch = (branch?: string, filePath?: string) => {
 };
 
 export const useGetGitLog = (limit: number = 50) => {
+  const { data: isGitRepo } = useIsGitRepo();
   return useQuery({
     queryKey: ["git:log", limit],
     queryFn: async () => {
       return window.electron?.git.getLog(limit);
     },
-    refetchInterval: 5000, // Refresh every 5 seconds
+    enabled: !!isGitRepo,
+    refetchInterval: isGitRepo ? 90000 : false,
+    refetchIntervalInBackground: false,
+    staleTime: 8000,
   });
 };
 
@@ -164,12 +187,16 @@ export const useGetCommitFiles = (commitHash: string | null) => {
 };
 
 export const useGetGitStatus = () => {
+  const { data: isGitRepo } = useIsGitRepo();
   return useQuery({
     queryKey: ["git:status"],
     queryFn: async () => {
       return window.electron?.git.getStatus();
     },
-    refetchInterval: 1000, // Refetch every second to keep it updated
+    enabled: !!isGitRepo,
+    refetchInterval: isGitRepo ? 45000 : false,
+    refetchIntervalInBackground: false,
+    staleTime: 2000,
   });
 };
 
@@ -181,6 +208,8 @@ export const useInitializeGit = () => {
       return window.electron?.git.initialize();
     },
     onSuccess: () => {
+      // Invalidate isRepo so all git polling hooks re-enable
+      queryClient.invalidateQueries({ queryKey: ["git:isRepo"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["git:status"] });
       queryClient.invalidateQueries({ queryKey: ["git:branches"] });
     },
@@ -309,10 +338,13 @@ export const useRemoveGitRemote = () => {
 };
 
 export const useStashList = () => {
+  const { data: isGitRepo } = useIsGitRepo();
   return useQuery({
     queryKey: ["git:stashList"],
     queryFn: async () => window.electron?.git.stashList() ?? [],
-    refetchInterval: 5000,
+    enabled: !!isGitRepo,
+    refetchInterval: isGitRepo ? 75000 : false,
+    refetchIntervalInBackground: false,
   });
 };
 
@@ -351,10 +383,14 @@ export const useUncommit = () => {
 };
 
 export const useGetConflicts = () => {
+  const { data: isGitRepo } = useIsGitRepo();
   return useQuery({
     queryKey: ["git:conflicts"],
     queryFn: async () => window.electron?.git.getConflicts() ?? [],
-    refetchInterval: 2000,
+    enabled: !!isGitRepo,
+    refetchInterval: isGitRepo ? 60000 : false,
+    refetchIntervalInBackground: false,
+    staleTime: 4000,
   });
 };
 
@@ -392,6 +428,7 @@ export const useGetFileContent = (file: string | null) => {
 // Returns a manual trigger for use in refresh actions.
 export const useFetchRemote = () => {
   const queryClient = useQueryClient();
+  const { data: isGitRepo } = useIsGitRepo();
 
   const invalidateAfterFetch = () => {
     queryClient.invalidateQueries({ queryKey: ["git:status"] });
@@ -399,8 +436,9 @@ export const useFetchRemote = () => {
     queryClient.invalidateQueries({ queryKey: ["git:remoteUrl"] });
   };
 
-  // Background fetch every 30 seconds — errors silenced (no remote / offline)
+  // Background fetch every 2 minutes — only when in a git repo, errors silenced (no remote / offline)
   useEffect(() => {
+    if (!isGitRepo) return;
     const run = async () => {
       try {
         await window.electron?.git.fetchRemote();
@@ -408,9 +446,9 @@ export const useFetchRemote = () => {
       } catch { /* no remote or network unavailable */ }
     };
     run();
-    const id = setInterval(run, 30000);
+    const id = setInterval(run, 120000);
     return () => clearInterval(id);
-  }, []);
+  }, [isGitRepo]);
 
   // Manual trigger — lets the caller handle errors
   const triggerFetch = async () => {

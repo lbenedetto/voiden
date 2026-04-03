@@ -18,7 +18,7 @@ import type { Tab } from "../../../../electron/src/shared/types";
 import { MainEditor } from "./components/MainEditor";
 import { savePanelStateForTab } from "./components/PanelTabs";
 import { useElectronEvent } from "@/core/providers/ElectronEventProvider";
-import { useGetPanelTabs, useAddPanelTab, useActivateTab } from "./hooks";
+import { useGetPanelTabs, useAddPanelTab, useActivateTab, useClosePanelTab } from "./hooks";
 import { setEnvJumpTarget } from "@/core/environment/components/EnvironmentEditor";
 import { useEnvironments } from "@/core/environment/hooks";
 import { mountVariableValueTooltip, unmountVariableValueTooltip } from "@/core/editors/variableValueTooltip";
@@ -32,11 +32,13 @@ export const AppLayout = () => {
   const closeRightPanel = usePanelStore((state) => state.closeRightPanel);
 
   const { data: appState } = useGetAppState();
+  const [onboarding, setOnboarding] = useState<boolean | null>(null);
   const [version, setVersion] = useState<string>("");
   const [isAboutModalOpen, setIsAboutModalOpen] = useState(false);
   let { settings, onChange, setSettings } = useSettings();
   const { mutate: addPanelTab } = useAddPanelTab();
   const { mutate: activateTab } = useActivateTab();
+  const { mutate: closePanelTab } = useClosePanelTab();
   const { data: panelTabs } = useGetPanelTabs("main");
   const { data: envData } = useEnvironments();
 
@@ -109,6 +111,11 @@ export const AppLayout = () => {
     window.electron?.getVersion().then(setVersion);
   }, []);
 
+  // Read onboarding status directly from onboarding.json
+  useEffect(() => {
+    window.electron?.state.getOnboarding().then(setOnboarding);
+  }, []);
+
   // Apply font size settings
   useEffect(() => {
     if (settings?.appearance?.font_size) {
@@ -122,7 +129,14 @@ export const AppLayout = () => {
     }
   }, [settings?.appearance?.ui_font_size]);
 
-  
+  // Expose settings to window for ProseMirror plugins (which can't use React hooks)
+  useEffect(() => {
+    if (settings) {
+      (window as any).__voidenSettings = settings;
+    }
+  }, [settings]);
+
+
 
   // Apply code wrap
   useEffect(() => {
@@ -362,11 +376,13 @@ export const AppLayout = () => {
 
   useElectronEvent("menu:find", () => {
     // Trigger find in the active editor
-    // This could be enhanced to focus find input if it exists
-    document.dispatchEvent(new KeyboardEvent('keydown', {
+    // Dispatch on body (not document) so e.target has .closest()
+    const target = (document.activeElement as HTMLElement) || document.body;
+    target.dispatchEvent(new KeyboardEvent('keydown', {
       key: 'f',
       metaKey: true,
-      ctrlKey: true
+      ctrlKey: true,
+      bubbles: true,
     }));
   });
 
@@ -398,6 +414,27 @@ export const AppLayout = () => {
       });
     }
   });
+
+  useElectronEvent("menu:open-logs", () => {
+    const existing = panelTabs?.tabs?.find((t: any) => t.type === "logs");
+    if (existing) {
+      activateTab({ panelId: "main", tabId: existing.id });
+    } else {
+      addPanelTab({
+        panelId: "main",
+        tab: { id: crypto.randomUUID(), type: "logs", title: "System Logs", source: null },
+      });
+    }
+  });
+
+  useEffect(() => {
+    if (settings?.developer?.system_log === false) {
+      const logsTab = panelTabs?.tabs?.find((t: any) => t.type === "logs");
+      if (logsTab) {
+        closePanelTab({ panelId: "main", tabId: logsTab.id });
+      }
+    }
+  }, [settings?.developer?.system_log]);
 
   return (
     <div className="h-screen w-screen bg-bg font-sans text-text text-base flex flex-col overflow-hidden select-none">
@@ -435,8 +472,8 @@ export const AppLayout = () => {
         toggleRight={toggleRight}
       />
 
-      {/* Onboarding Modal */}
-      {!appState?.onboarding && <OnboardingModal />}
+      {/* Onboarding Modal — shown only on a fresh install (driven by onboarding.json) */}
+      {onboarding === false && <OnboardingModal />}
 
       {/* About Modal */}
       <AboutModal isOpen={isAboutModalOpen} onClose={() => setIsAboutModalOpen(false)} />

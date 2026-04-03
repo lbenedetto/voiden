@@ -7,26 +7,10 @@ import { insertSocketNode } from './lib/utils';
 import { createMessagesNode } from './nodes/MessagesNode';
 import { createGrpcMessagesNode } from './nodes/gRPCMessageNode';
 import manifest from "./manifest.json";
-import React from 'react';
-import { CopyWebsocatButton } from './components/CopyWebsocatButton';
-import { CopyGrpcurlButton } from './components/CopyGrpcurlButton';
 import { socketHistoryAdapter } from './historyAdapter';
-
-// Lazily cached store reference so the synchronous predicates can read unsaved content.
-// Lazily cached store reference so the synchronous predicate can read unsaved content.
-let _editorStore: any = null;
 
 // Captured proto services from the most recent gRPC build request — injected into the response doc.
 let _pendingProtoServices: any[] | null = null;
-function getEditorStore() {
-  if (!_editorStore) {
-    // @ts-ignore - resolved at runtime in app context
-    (import(/* @vite-ignore */ '@/core/editors/voiden/VoidenEditor') as Promise<any>)
-      .then((m: any) => { _editorStore = m.useEditorStore; })
-      .catch(() => {});
-  }
-  return _editorStore;
-}
 
 export default function createSocketPlugin(context: PluginContext) {
   const extendedContext = {
@@ -75,7 +59,7 @@ export default function createSocketPlugin(context: PluginContext) {
             name: "web-socket",
             label: "Web Socket",
             aliases: ['websocket', 'ws', "wss"],
-            singleton: true,
+            singleton: false,
             compareKeys: ["socket-request", "endpoint", "request"],
             slash: "/wss",
             description: "Insert Web Socket block",
@@ -86,7 +70,7 @@ export default function createSocketPlugin(context: PluginContext) {
           {
             name: "grpcs-socket",
             label: "gRPCS Socket",
-            singleton: true,
+            singleton: false,
             compareKeys: ["socket-request", "request", "endpoint"],
             aliases: ['grpcsocket', 'grpc', 'grpcs'],
             slash: "/grpcs",
@@ -98,110 +82,6 @@ export default function createSocketPlugin(context: PluginContext) {
         ],
       });
 
-      // Register Copy websocat action
-      context.registerEditorAction({
-        id: "copy-websocat-button",
-        component: (props: any) =>
-          React.createElement(CopyWebsocatButton, {
-            tab: props?.tab,
-            context: context
-          }),
-        predicate: (tab) => {
-          // Show copy websocat button for .void files that contain a socket-request inside a ```void fenced block
-          const name = tab?.title?.toLowerCase() || "";
-          if (!name.endsWith(".void")) return false;
-
-          const store = getEditorStore();
-          // Check unsaved content first
-          if (tab?.tabId && store) {
-            const unsaved = store.getState().unsaved[tab.tabId];
-            if (unsaved) {
-              try {
-                const doc = JSON.parse(unsaved);
-                const hasWs = doc?.content?.some((node: any) => {
-                  if (node.type !== 'socket-request') return false;
-                  const method = node.content?.find((c: any) => c.type === 'smethod')?.content?.[0]?.text || '';
-                  return /^wss?$/i.test(method.trim());
-                });
-                if (hasWs) return true;
-              } catch {}
-            }
-          }
-
-          const content = tab?.content;
-          if (typeof content !== 'string' || content.trim().length === 0) return false;
-
-          try {
-            const text = content;
-            const fenceRegex = /```\s*void([\s\S]*?)```/gi;
-            let match;
-            while ((match = fenceRegex.exec(text)) !== null) {
-              const inner = match[1] || '';
-              if (/type:\s*socket-request/i.test(inner)) {
-                // Check for smethod content (e.g. WSS/GRPCS) or surl scheme
-                const methodMatch = inner.match(/-\s*type:\s*smethod[\s\S]*?content:\s*([^\n\r]+)/i);
-                if (methodMatch && /wss?|ws/i.test(methodMatch[1].trim())) return true;
-              }
-            }
-
-            return false;
-          } catch {
-            return false;
-          }
-        },
-      });
-
-      // Register Copy grpcurl action
-      context.registerEditorAction({
-        id: "copy-grpcurl-button",
-        component: (props: any) =>
-          React.createElement(CopyGrpcurlButton, {
-            tab: props?.tab,
-            context: context
-          }),
-        predicate: (tab) => {
-          // Show copy grpcurl button for .void files that contain a socket-request inside a ```void fenced block
-          const name = tab?.title?.toLowerCase() || "";
-          if (!name.endsWith(".void")) return false;
-
-          const store = getEditorStore();
-          // Check unsaved content first
-          if (tab?.tabId && store) {
-            const unsaved = store.getState().unsaved[tab.tabId];
-            if (unsaved) {
-              try {
-                const doc = JSON.parse(unsaved);
-                const hasGrpc = doc?.content?.some((node: any) => {
-                  if (node.type !== 'socket-request') return false;
-                  const method = node.content?.find((c: any) => c.type === 'smethod')?.content?.[0]?.text || '';
-                  return /^grpcs?$/i.test(method.trim());
-                });
-                if (hasGrpc) return true;
-              } catch {}
-            }
-          }
-
-          const content = tab?.content;
-          if (typeof content !== 'string' || content.trim().length === 0) return false;
-
-          try {
-            const text = content;
-            const fenceRegex = /```\s*void([\s\S]*?)```/gi;
-            let match;
-            while ((match = fenceRegex.exec(text)) !== null) {
-              const inner = match[1] || '';
-              if (/type:\s*socket-request/i.test(inner) || /socket-request/i.test(inner)) {
-                // Check for smethod content indicating GRPCS/GRPC or surl scheme
-                const methodMatch = inner.match(/-\s*type:\s*smethod[\s\S]*?content:\s*([^\n\r]+)/i);
-                if (methodMatch && /grpcs?|grpc/i.test(methodMatch[1].trim())) return true;
-              }
-            }
-            return false;
-          } catch {
-            return false;
-          }
-        },
-      });
 
       context.onProcessResponse(async (response) => {
         if (response.protocol !== 'wss' && response.protocol !== 'ws' && response.protocol !== 'grpc' && response.protocol !== 'grpcs') {
@@ -240,6 +120,14 @@ export default function createSocketPlugin(context: PluginContext) {
               grpcId: response.grpcId || '',
             });
           }
+          // Forward section metadata for multi-request support
+          if (response.__sectionIndex !== undefined) {
+            responseDoc.attrs = responseDoc.attrs || {};
+            responseDoc.attrs.sectionIndex = response.__sectionIndex;
+            responseDoc.attrs.sectionColorIndex = response.__sectionColorIndex;
+            responseDoc.attrs.sectionLabel = response.__sectionLabel;
+          }
+
           await context.openVoidenTab(
             `connected`,
             responseDoc,
@@ -252,17 +140,22 @@ export default function createSocketPlugin(context: PluginContext) {
       // Register request building handler for socket requests
       context.onBuildRequest(async (request, editor) => {
         try {
+          // Get the JSON from the editor (linked blocks are already expanded by the orchestrator)
+          const editorJson = editor.getJSON();
+
+          // Skip sections without a socket-request node (e.g. REST or GraphQL sections in multi-request files)
+          if (!editorJson.content?.some((n: any) => n.type === 'socket-request')) {
+            return request;
+          }
+
+          // Skip GraphQL documents — the GraphQL plugin handles its own request building
+          if (editorJson.content?.some((n: any) => n.type === 'gqlquery')) {
+            return request;
+          }
+
           // Dynamic import of getRequest function from app
           // @ts-ignore - Path resolved at runtime in app context
           const { getRequest } = await import(/* @vite-ignore */ '@/core/request-engine/getRequestFromJson');
-
-          // Get the JSON from the editor
-          let editorJson = editor.getJSON();
-
-          // Expand any linked blocks so plugins can access their content
-          // @ts-ignore - Path resolved at runtime in app context
-          const { expandLinkedBlocksInDoc } = await import(/* @vite-ignore */ '@/core/editors/voiden/utils/expandLinkedBlocks');
-          editorJson = await expandLinkedBlocksInDoc(editorJson);
 
           // Capture proto services for injection into the response doc
           try {
@@ -352,31 +245,22 @@ export default function createSocketPlugin(context: PluginContext) {
                 return false;
               }
 
-              // Confirm replacement if editor is not empty
+              // Multi-request support: if editor has existing content, add as a new section
               if (!editor.isEmpty) {
-                const commandType = /^websocat\s+/i.test(trimmedText) ? 'websocat' : 'grpcurl';
-                const proceed = window.confirm(`Pasting this ${commandType} request will replace the current content. Do you want to proceed?`);
-                if (!proceed) {
-                  return true; // Handled but cancelled
-                }
-              }
-
-              // Populate editor with socket request
-              updateEditorContent(editor, (editorJsonContent) => {
-                const requestBlocks = ["socket-request", "headers-table", "path-table", "query-table", "proto"];
-
-                // Clean up existing socket request nodes
-                editorJsonContent = editorJsonContent.filter((node: any) => {
-                  if (node.type === "endpoint") return false;
-                  if (node.type && requestBlocks.includes(node.type)) return false;
-                  return true;
+                updateEditorContent(editor, (editorJsonContent) => {
+                  // Add a request-separator before the new request
+                  editorJsonContent.push({ type: "request-separator", attrs: {} });
+                  // Add the converted socket request
+                  editorJsonContent.push(...(socketRequest || []));
+                  return insertParagraphAfterRequestBlocks(editorJsonContent);
                 });
-                // Add the converted socket request
-                editorJsonContent.push(...(socketRequest || []));
-
-                // Add paragraph after request blocks
-                return insertParagraphAfterRequestBlocks(editorJsonContent);
-              });
+              } else {
+                // Empty editor — just insert directly
+                updateEditorContent(editor, (editorJsonContent) => {
+                  editorJsonContent.push(...(socketRequest || []));
+                  return insertParagraphAfterRequestBlocks(editorJsonContent);
+                });
+              }
 
               return true;
             } catch (error) {
@@ -409,13 +293,12 @@ export default function createSocketPlugin(context: PluginContext) {
 
           if (!socketRequest || !editor) return false;
 
+          const hasContent = !editor.isEmpty;
           updateEditorContent(editor, (editorJsonContent: any[]) => {
-            const requestBlocks = ['socket-request', 'headers-table', 'path-table', 'query-table', 'proto'];
-            editorJsonContent = editorJsonContent.filter((node: any) => {
-              if (node.type === 'endpoint') return false;
-              if (node.type && requestBlocks.includes(node.type)) return false;
-              return true;
-            });
+            if (hasContent) {
+              // Multi-request: add separator before new request
+              editorJsonContent.push({ type: "request-separator", attrs: {} });
+            }
             editorJsonContent.push(...(socketRequest || []));
             return insertParagraphAfterRequestBlocks(editorJsonContent);
           });

@@ -19,6 +19,7 @@ import { AnyExtension, Extension, PasteRule } from "@tiptap/core";
 import Dropcursor from "@tiptap/extension-dropcursor";
 import { FileLink } from "./extensions/ExternalFile";
 import { LinkedBlock } from "./extensions/BlockLink";
+import { SourceSyncIndicator } from "./extensions/SourceSyncIndicator";
 import { autoCloseBrackets } from "./extensions/autocloseBrackets";
 import Link from "@tiptap/extension-link";
 import { CustomCode } from "./extensions/CustomCode";
@@ -27,6 +28,8 @@ import { cmdEnter } from "./extensions/cmdEnter";
 import { PasteHandler } from "./extensions/pasteHandler";
 import { SeamlessNavigation } from "./extensions/seamlessNavigation";
 import { cmdAll } from "./extensions/cmdAll";
+import { RequestSeparatorNode } from "./nodes/RequestSeparatorNode";
+import { TableCellAutocomplete } from "./extensions/TableCellAutocomplete";
 
 // Extension to prevent markdown input rules in table cells
 const DisableMarkdownInTables = Extension.create({
@@ -182,6 +185,7 @@ export const voidenExtensions: AnyExtension[] = [
   TableCell, // Use default TableCell instead of Custom
   CustomTableHeader,
   DisableMarkdownInTables, // Prevent markdown input rules in ALL table cells
+  TableCellAutocomplete, // Context-aware autocomplete for headers, options, assertions
   PreventTableGapClicks, // Prevent clicking in gaps around table blocks
   CustomCodeBlock, // Use our custom codeBlock with CodeEditor
 
@@ -199,11 +203,13 @@ export const voidenExtensions: AnyExtension[] = [
 
   FileLink,
   LinkedBlock,
+  SourceSyncIndicator,
 
   CopyExtension,
   PasteHandler,
   SeamlessNavigation,
   VariableCapture,
+  RequestSeparatorNode,
   Link.configure({
     openOnClick: false, // Disable default click handler
     linkOnPaste: false, // disable default link-on-paste behavior

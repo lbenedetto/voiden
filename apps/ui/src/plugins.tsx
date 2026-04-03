@@ -39,6 +39,7 @@ import { NodeViewWrapper } from "@tiptap/react";
 import { useSendRestRequest } from "@/core/request-engine";
 import { RequestBlockHeader } from "@/core/editors/voiden/nodes/RequestBlockHeader";
 import { useParentResponseDoc } from "@/core/extensions/hooks/useParentResponseDoc";
+import { useResponseBodyHeight } from "@/core/extensions/hooks/useResponseBodyHeight";
 import { toast } from "sonner";
 import { HistoryEntry } from "@/core/history/types";
 import { buildCurlFromEntry } from "@/core/history/historyManager";
@@ -229,6 +230,9 @@ const linkableNodeTypes = new Set<string>(coreLinkableNodeTypes);
 // Global registry for node display names (for showing human-readable names in UI)
 const nodeDisplayNames = new Map<string, string>(Object.entries(coreNodeDisplayNames));
 
+// Global registry for table cell autocomplete suggestions (plugin-owned)
+const tableSuggestionsRegistry = new Map<string, { [columnIndex: number]: Array<{ label: string; description?: string }> }>();
+
 // Global registry for loaded plugin instances (for cleanup)
 const loadedPlugins: Map<string, { onload: () => Promise<void>; onunload: () => Promise<void> }> = new Map();
 
@@ -264,6 +268,19 @@ export const getLinkableNodeTypes = (): string[] => {
  */
 export const getNodeDisplayName = (nodeType: string): string | undefined => {
   return nodeDisplayNames.get(nodeType);
+};
+
+/**
+ * Get table cell suggestions for a specific table type and column.
+ * Used by TableCellAutocomplete extension.
+ */
+export const getTableSuggestions = (
+  tableType: string,
+  columnIndex: number,
+): Array<{ label: string; description?: string }> => {
+  const config = tableSuggestionsRegistry.get(tableType);
+  if (!config) return [];
+  return config[columnIndex] || [];
 };
 
 export const createPlugin = (pluginModule: (context: PluginContext) => Plugin, extensionId: string) => {
@@ -540,6 +557,7 @@ export const createPlugin = (pluginModule: (context: PluginContext) => Plugin, e
       hooks: {
         useSendRestRequest,
         useParentResponseDoc,
+        useResponseBodyHeight,
       },
       showToast: (message: string, type?: 'info' | 'success' | 'warning' | 'error') => {
         if (type) {
@@ -650,6 +668,7 @@ export const createPlugin = (pluginModule: (context: PluginContext) => Plugin, e
         const { useResponseStore } = await import('@/core/request-engine/stores/responseStore');
 
         const tabId = useResponseStore.getState().currentRequestTabId;
+        console.log('[openVoidenTab] title:', title, 'tabId:', tabId, 'isLoading:', useResponseStore.getState().isLoading, 'content:', JSON.stringify(content).slice(0, 200));
 
         if (!tabId) {
           useResponseStore.getState().setResponse('__default__', content, null);
@@ -670,6 +689,10 @@ export const createPlugin = (pluginModule: (context: PluginContext) => Plugin, e
       Object.entries(displayNames).forEach(([nodeType, displayName]) => {
         nodeDisplayNames.set(nodeType, displayName);
       });
+    },
+    registerTableSuggestions: (tableType: string, suggestions: { [columnIndex: number]: Array<{ label: string; description?: string }> }) => {
+      extensionLogger.info(`Plugin "${extensionId}" registering table suggestions for "${tableType}"`);
+      tableSuggestionsRegistry.set(tableType, suggestions);
     },
     registerHistoryAdapter: (adapter: any) => {
       extensionLogger.info(`Plugin "${extensionId}" registering history adapter`);
@@ -721,6 +744,7 @@ export const getPlugins = async () => {
   coreLinkableNodeTypes.forEach(type => linkableNodeTypes.add(type)); // Re-seed core linkable types
   nodeDisplayNames.clear(); // Clear node display names on plugin reload
   Object.entries(coreNodeDisplayNames).forEach(([type, name]) => nodeDisplayNames.set(type, name)); // Re-seed core display names
+  tableSuggestionsRegistry.clear(); // Clear table suggestions on plugin reload
   requestOrchestrator.clear();
   pasteOrchestrator.clear();
   historyAdapterRegistry.clear();
