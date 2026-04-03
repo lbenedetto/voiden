@@ -19,7 +19,10 @@
     "version:bump:beta-prerelease": "node version-bump.js beta prerelease",
     "version:bump:stable-patch": "node version-bump.js stable patch",
     "version:bump:stable-minor": "node version-bump.js stable minor",
-    "version:bump:stable-major": "node version-bump.js stable major"
+    "version:bump:stable-major": "node version-bump.js stable major",
+    "publish:apt:beta": "node publish-apt.js beta",
+    "publish:apt:stable": "node publish-apt.js stable",
+    "publish:apt": "node publish-apt.js"
   },
   "installConfig": {
     "hoistingLimits": "workspaces"
