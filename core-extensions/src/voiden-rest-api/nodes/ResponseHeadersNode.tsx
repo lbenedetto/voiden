@@ -55,7 +55,6 @@ export const createResponseHeadersNode = (
       try {
         await navigator.clipboard.writeText(headersText);
       } catch (error) {
-        // console.error('[ResponseHeaders] Copy error:', error);
       }
     };
 
@@ -72,7 +71,6 @@ export const createResponseHeadersNode = (
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
       } catch (error) {
-        // console.error('[ResponseHeaders] Download error:', error);
       }
     };
 

@@ -369,7 +369,6 @@ export async function sendRequestHybrid(
 
     // Check if request failed
     if (!electronResponse.status && electronResponse.statusText) {
-      // console.error("[HybridPipeline] Request failed:", electronResponse.statusText);
       const errorResponse: BaseResponse = {
         statusCode: 0,
         protocol:electronResponse.protocol,

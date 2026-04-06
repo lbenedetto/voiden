@@ -479,7 +479,6 @@ export const SettingsScreen = () => {
         });
       }
     } catch (error) {
-      // console.error("Failed to uninstall font:", error);
     }
   };
 

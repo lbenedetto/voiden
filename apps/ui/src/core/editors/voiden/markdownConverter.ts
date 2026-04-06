@@ -419,7 +419,6 @@ const processCubeNode = (node: any, schema: any) => {
   try {
     return processCubeBlockText(node.value, schema);
   } catch (e) {
-    // console.error("error processing cube node:", e);
     return {
       type: "paragraph",
       content: [{ type: "text", text: node.value }],

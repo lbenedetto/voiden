@@ -5,7 +5,6 @@ import * as fs from "fs";
 import * as path from "path";
 import { logger } from "./logger";
 
-// Add caching to improve performance
 interface GitStatusCache {
   timestamp: number;
   status: Map<string, any>;
@@ -46,7 +45,6 @@ function dedupeBranchNames(branches: string[], remoteNames: Set<string>): string
   return result;
 }
 
-// Cache for Git status and branch information
 const gitStatusCache = new Map<string, GitStatusCache>();
 const branchCache = new Map<string, BranchCache>();
 const CACHE_EXPIRATION = 30000; // 30 seconds — reduces redundant git status calls between tree reloads
@@ -125,7 +123,6 @@ export function getSharedGit(projectPath: string): ReturnType<typeof simpleGit> 
   return g;
 }
 
-// Get cached Git status or fetch new status
 export async function getCachedGitStatus(directory: string): Promise<Map<string, any>> {
   const cacheEntry = gitStatusCache.get(directory);
   if (cacheEntry && Date.now() - cacheEntry.timestamp < CACHE_EXPIRATION) {
@@ -169,7 +166,6 @@ export async function getCachedGitStatus(directory: string): Promise<Map<string,
   return p;
 }
 
-// Get cached branch info or fetch new info
 async function getCachedBranchInfo(projectPath: string): Promise<any> {
   const cacheEntry = branchCache.get(projectPath);
   if (cacheEntry && Date.now() - cacheEntry.timestamp < CACHE_EXPIRATION) {
@@ -194,9 +190,6 @@ async function getCachedBranchInfo(projectPath: string): Promise<any> {
 // after it warms, causing repeated 5s-blocking git status calls.
 const GIT_STATUS_MIN_AGE_MS = 5_000;
 
-// Invalidate caches after operations that modify Git state.
-// git status invalidation is guarded by GIT_STATUS_MIN_AGE_MS — if the cached
-// result is fresh (just ran), keep it and let the next natural expiry handle it.
 export function invalidateGitCache(projectPath: string): void {
   branchCache.delete(projectPath);
   const entry = gitStatusCache.get(projectPath);
@@ -205,12 +198,9 @@ export function invalidateGitCache(projectPath: string): void {
   }
 }
 
-// Original IPC handlers with optimized implementations
 ipcMain.handle("git:getBranches", async (event:IpcMainInvokeEvent): Promise<{ branches: string[]; activeBranch: string } | null> => {
-  // Get the active project directory.
   const projectPath = await getActiveProject(event);
   if (!projectPath) {
-    // console.error("No active project selected.");
     return null;
   }
 
@@ -221,7 +211,6 @@ ipcMain.handle("git:getBranches", async (event:IpcMainInvokeEvent): Promise<{ br
     const remotes = await git.getRemotes(false);
     const remoteNames = new Set(remotes.map((r) => r.name));
 
-    // Use cached branch info if available.
     const branchSummary = await getCachedBranchInfo(projectPath);
     if (!branchSummary) return null;
 
@@ -233,7 +222,6 @@ ipcMain.handle("git:getBranches", async (event:IpcMainInvokeEvent): Promise<{ br
 
     return { branches, activeBranch };
   } catch (error) {
-    // console.error("Error fetching git branches:", error);
     return null;
   }
 });
@@ -243,7 +231,6 @@ ipcMain.handle("git:checkout", async (event, projectPath: string, branch: string
     throw new Error("No active project selected.");
   }
   try {
-    // Initialize simple-git with the project path.
     const git = getSharedGit(projectPath);
     const remotes = await git.getRemotes(false);
     const remoteNames = new Set(remotes.map((r) => r.name));
@@ -287,10 +274,8 @@ ipcMain.handle("git:checkout", async (event, projectPath: string, branch: string
       }
     }
 
-    // Invalidate caches after state change
     invalidateGitCache(projectPath);
 
-    // Get fresh branch info
     const branchSummary = await git.branch();
 
     const activeBranch = normalizeBranchDisplayName(branchSummary.current, remoteNames);
@@ -299,12 +284,10 @@ ipcMain.handle("git:checkout", async (event, projectPath: string, branch: string
       ...branchSummary.all,
     ], remoteNames);
 
-    // Notify renderer so git status, log, and file tree all refresh immediately
     BrowserWindow.fromWebContents(event.sender)?.webContents.send('git:changed', { path: projectPath });
 
     return { activeBranch, branches };
   } catch (error) {
-    // console.error("Error checking out branch:", error);
     throw error;
   }
 });
@@ -315,17 +298,11 @@ ipcMain.handle("git:createBranch", async (_, projectPath: string, branch: string
   }
   try {
     const git = getSharedGit(projectPath);
-
-    // Create and checkout the new branch
     await git.checkoutLocalBranch(branch);
-
-    // Invalidate caches after state change
     invalidateGitCache(projectPath);
 
     const remotes = await git.getRemotes(false);
     const remoteNames = new Set(remotes.map((r) => r.name));
-
-    // Get fresh branch info
     const branchSummary = await git.branch();
 
     const activeBranch = normalizeBranchDisplayName(branchSummary.current, remoteNames);
@@ -336,7 +313,6 @@ ipcMain.handle("git:createBranch", async (_, projectPath: string, branch: string
 
     return { activeBranch, branches };
   } catch (error) {
-    // console.error("Error creating new branch:", error);
     throw error;
   }
 });
@@ -347,17 +323,11 @@ ipcMain.handle("git:createBranchFrom", async (_, projectPath: string, branch: st
   }
   try {
     const git = getSharedGit(projectPath);
-
-    // Create and checkout the new branch from the specified source branch
     await git.checkoutBranch(branch, fromBranch);
-
-    // Invalidate caches after state change
     invalidateGitCache(projectPath);
 
     const remotes = await git.getRemotes(false);
     const remoteNames = new Set(remotes.map((r) => r.name));
-
-    // Get fresh branch info
     const branchSummary = await git.branch();
 
     const activeBranch = normalizeBranchDisplayName(branchSummary.current, remoteNames);
@@ -376,7 +346,6 @@ ipcMain.handle('git:updateGitignore', async (_event, filePatterns: string | stri
   await updateGitignore(filePatterns, rootDir);
 })
 
-// Get diff summary between two branches
 ipcMain.handle("git:diffBranches", async (event:IpcMainInvokeEvent, baseBranch: string, compareBranch: string) => {
   const projectPath = await getActiveProject(event);
   if (!projectPath) {
@@ -387,13 +356,8 @@ ipcMain.handle("git:diffBranches", async (event:IpcMainInvokeEvent, baseBranch: 
     if (!await getCachedIsRepo(projectPath)) throw new Error("Not a git repository");
     const git = getSharedGit(projectPath);
 
-    // Get diff summary between branches (using two dots for direct comparison)
     const diffSummary = await git.diffSummary([`${baseBranch}..${compareBranch}`]);
-
-    // Get list of changed files with their status
     const diff = await git.diff([`${baseBranch}..${compareBranch}`, '--name-status']);
-
-    // Parse the diff to get file status (A=Added, M=Modified, D=Deleted, R=Renamed)
     const fileChanges = diff.split('\n').filter(line => line.trim()).map(line => {
       const parts = line.split('\t');
       const status = parts[0];
@@ -422,7 +386,6 @@ ipcMain.handle("git:diffBranches", async (event:IpcMainInvokeEvent, baseBranch: 
   }
 });
 
-// Get diff for a specific file between two branches
 ipcMain.handle("git:diffFile", async (event:IpcMainInvokeEvent, baseBranch: string, compareBranch: string, filePath: string) => {
   const projectPath = await getActiveProject(event);
   if (!projectPath) {
@@ -431,8 +394,6 @@ ipcMain.handle("git:diffFile", async (event:IpcMainInvokeEvent, baseBranch: stri
 
   try {
     const git = getSharedGit(projectPath);
-
-    // Get unified diff for the file
     const diff = await git.diff([`${baseBranch}..${compareBranch}`, '--', filePath]);
 
     return diff;
@@ -442,7 +403,6 @@ ipcMain.handle("git:diffFile", async (event:IpcMainInvokeEvent, baseBranch: stri
   }
 });
 
-// Get file content at a specific branch
 ipcMain.handle("git:getFileAtBranch", async (event:IpcMainInvokeEvent, branch: string, filePath: string) => {
   const projectPath = await getActiveProject(event);
   if (!projectPath) {
@@ -452,15 +412,10 @@ ipcMain.handle("git:getFileAtBranch", async (event:IpcMainInvokeEvent, branch: s
   try {
     if (!await getCachedIsRepo(projectPath)) return null;
     const git = getSharedGit(projectPath);
-
-    // Get file content at the specified branch
-    // Note: git show uses paths relative to the repository root
     const content = await git.show([`${branch}:${filePath}`]);
 
     return content;
   } catch (error) {
-    // File might not exist in this branch or other git error
-    console.error("Error getting file at branch:", error);
     return null;
   }
 });
@@ -469,10 +424,8 @@ export const aggregateGitStatus = (nodes: TreeNode[]): any => {
   let highestPriority = 0;
   let aggregatedStatus: any = null;
   nodes.forEach((child) => {
-    // For files, use the git status; for folders, use the aggregated status.
     const status = child.type === "file" ? child.git : child.aggregatedGitStatus;
     if (status) {
-      // Define priorities: Modified > Added/Untracked.
       let priority = 0;
       if (status.working_dir === "M" || status.index === "M") {
         priority = 2;

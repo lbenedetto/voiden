@@ -264,7 +264,6 @@ export default function createSocketPlugin(context: PluginContext) {
 
               return true;
             } catch (error) {
-              // console.error('[VOIDEN] Error processing socket command:', error);
               return false;
             }
           },

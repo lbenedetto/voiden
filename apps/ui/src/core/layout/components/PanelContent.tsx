@@ -653,14 +653,6 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
     if (!panel) return null;
     const terminalTabs = tabs?.tabs?.filter((tab: any) => tab.type === "terminal") || [];
 
-    // // In the unlikely event that no terminal tab exists (perhaps due to a race condition),
-    // // you could also trigger adding one here.
-    // if (terminalTabs.length === 0) {
-    //   // This will run on mount if there are no terminal tabs.
-    //   createTerminalTab(panelId);
-    //   return <div>Loading Terminal...</div>;
-    // }
-
     // Map each terminal tab to the shape expected by TerminalManager.
     const terminals = terminalTabs.map((tab: any) => ({
       tabId: tab.id,

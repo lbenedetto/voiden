@@ -62,7 +62,6 @@ async function findEnvFilesRecursively(dir: string) {
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch (err) {
-    // console.error(`Unable to read directory ${dir}:`, err);
     return envFiles;
   }
 
@@ -98,7 +97,6 @@ async function loadProjectEnv(projectPath: string) {
     try {
       content = await fs.readFile(filePath, "utf8");
     } catch (err) {
-      // console.error(`Unable to read ${filePath}:`, err);
       continue;
     }
     const parsedEnv = parseEnvContent(content);
@@ -354,7 +352,6 @@ export async function replaceVariablesSecure(text: string, projectPath: string):
 ipcMain.handle("env:replaceVariables", async (_, text: string) => {
   const activeProject = await getActiveProject();
   if (!activeProject) {
-    // console.error("[env:replaceVariables] No active project");
     return text;
   }
   return replaceVariablesSecure(text, activeProject);

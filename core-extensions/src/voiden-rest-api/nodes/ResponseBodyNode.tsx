@@ -215,7 +215,6 @@ export const createResponseBodyNode = (
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
       } catch (error) {
-        // console.error("[ResponseBody] Download error:", error);
       }
     };
 
@@ -225,7 +224,6 @@ export const createResponseBodyNode = (
         const textToCopy = typeof body === "string" ? body : JSON.stringify(body, null, 2);
         await navigator.clipboard.writeText(textToCopy);
       } catch (error) {
-        // console.error("[ResponseBody] Copy error:", error);
       }
     };
 
@@ -259,12 +257,9 @@ export const createResponseBodyNode = (
             const base64 = btoa(body);
             imageUrl = `data:${ct};base64,${base64}`;
           } else {
-            // Fallback - try toString
-            // console.warn("[ResponseBody] Unknown body format for image:", typeof body, body?.constructor?.name);
             imageUrl = `data:${ct};base64,${String(body)}`;
           }
         } catch (error) {
-          // console.error("[ResponseBody] Error creating image URL:", error);
           return (
             <div className="p-4 text-comment text-sm">
               Failed to load image. Error: {String(error)}
@@ -316,7 +311,6 @@ export const createResponseBodyNode = (
             videoUrl = `data:${ct};base64,${String(body)}`;
           }
         } catch (error) {
-          // console.error("[ResponseBody] Error creating video URL:", error);
           return <div className="p-4 text-comment text-sm">Failed to load video.</div>;
         }
 
@@ -352,7 +346,6 @@ export const createResponseBodyNode = (
             audioUrl = `data:${ct};base64,${String(body)}`;
           }
         } catch (error) {
-          // console.error("[ResponseBody] Error creating audio URL:", error);
           return <div className="p-4 text-comment text-sm">Failed to load audio.</div>;
         }
 
@@ -388,7 +381,6 @@ export const createResponseBodyNode = (
             pdfUrl = `data:application/pdf;base64,${String(body)}`;
           }
         } catch (error) {
-          // console.error("[ResponseBody] Error creating PDF URL:", error);
           return <div className="p-4 text-comment text-sm">Failed to load PDF.</div>;
         }
 

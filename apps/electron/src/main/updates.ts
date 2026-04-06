@@ -70,7 +70,6 @@ function detectLinuxPackageType(): "deb" | "rpm" | "appimage" {
       return "deb";
     }
   } catch (err) {
-    // console.warn("Failed to detect distro. Defaulting to rpm.");
   }
 
   return "rpm";
@@ -195,11 +194,7 @@ function installPackage(filePath: string, type: "deb" | "rpm" | "appimage") {
   const command = type === "deb" ? ["dpkg", "-i", filePath] : ["rpm", "-Uvh", filePath];
 
   execFile("pkexec", command, (error, _stdout, stderr) => {
-    fs.unlink(filePath, (unlinkErr) => {
-      if (unlinkErr) {
-        // console.warn(`⚠️ Could not delete temp file: ${filePath}`, unlinkErr.message);
-      }
-    });
+    fs.unlink(filePath, () => {});
 
     if (error) {
       setUpdateState(UpdateState.ERROR);
@@ -299,13 +294,11 @@ function checkForLinuxUpdate(currentVersion: string, channel: "stable" | "early-
           }
         } catch (err) {
           setUpdateState(UpdateState.ERROR);
-          // console.error("Failed to parse latest.json:", err);
         }
       });
     })
     .on("error", () => {
       setUpdateState(UpdateState.ERROR);
-      // console.error("Error fetching latest.json");
     });
 }
 
@@ -583,7 +576,6 @@ export function registerUpdateIpcHandlers() {
                   }
                 });
             } catch (err) {
-              // console.error("Failed to parse latest.json:", err);
             }
           });
         });

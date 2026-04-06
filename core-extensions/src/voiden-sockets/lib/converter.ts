@@ -508,7 +508,6 @@ export const updateEditorContent = (editor: Editor, updateContent: EditorContent
       )
       .run();
   } catch (error) {
-    // console.debug(error);
   }
 };
 

@@ -334,7 +334,6 @@ export function registerFileIpcHandlers() {
               mime.lookup(fullPath) || "application/octet-stream";
             return { fullPath, fileName, mimeType, data: fileBuffer };
           } catch (error) {
-            // console.error(`Error reading file at ${fullPath}:`, error);
             return {
               fullPath,
               fileName: path.basename(fullPath),
@@ -540,9 +539,6 @@ export function registerFileIpcHandlers() {
     }
   });
 
-  // Flat file list for the '@' file-link feature.
-  // BFS walk: skips heavy dirs, caps at 2000 results to stay memory-safe.
-  // Uses only `fs` and `path` — no imports from other main-process modules.
   // Flat file list for the '@' file-link feature.
   // Uses `rg --files` for near-instant listing; falls back to BFS if rg is unavailable.
   // Accepts an optional query to filter filenames (case-insensitive) and caps at 100 results.

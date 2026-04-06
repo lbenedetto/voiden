@@ -129,7 +129,6 @@ function setupExtensionListener() {
   const messageHandler = (message: MessageEvent) => {
     if (message.data.event === "__EXTENSION_HOOK__") {
       window.__EXTENSION_HOOK__ = message.data.eventData;
-      // console.debug("Voiden Extension is enabled and ready to use");
     } else if (message.data.event === "__EXTENSION_UN_HOOK__") {
       delete window.__EXTENSION_HOOK__;
     }

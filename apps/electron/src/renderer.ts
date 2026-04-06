@@ -29,4 +29,3 @@
 import "./../../ui/src/styles.css";
 import "../../ui/src/main";
 
-// console.debug('👋 All good, so far');

@@ -46,11 +46,9 @@ function syncBundledThemes(): void {
 
     // Check if bundled themes directory exists
     if (!fs.existsSync(bundledDir)) {
-      // console.warn("Bundled themes directory not found:", bundledDir);
       return;
     }
 
-    // Copy all bundled themes to user directory (overwriting existing ones)
     const files = fs.readdirSync(bundledDir);
     for (const file of files) {
       if (file.endsWith(".json")) {
@@ -61,20 +59,16 @@ function syncBundledThemes(): void {
           const themeData = fs.readFileSync(sourcePath, "utf-8");
           fs.writeFileSync(destPath, themeData, "utf-8");
         } catch (error) {
-          // console.error(`Failed to copy theme ${file}:`, error);
         }
       }
     }
   } catch (error) {
-    // console.error("Failed to sync bundled themes:", error);
   }
 }
 
 export function registerThemeIpcHandlers() {
-  // Sync bundled themes to user directory on startup
   syncBundledThemes();
 
-  // Manual sync handler for the settings UI
   ipcMain.handle("themes:sync", async (): Promise<{ success: boolean; error?: string }> => {
     try {
       syncBundledThemes();
@@ -87,14 +81,11 @@ export function registerThemeIpcHandlers() {
     }
   });
 
-  // List all available themes
   ipcMain.handle("themes:list", async (): Promise<ThemeMetadata[]> => {
     const themesDir = getUserThemesDirectory();
 
     try {
-      // Ensure themes directory exists
       if (!fs.existsSync(themesDir)) {
-        // console.warn("Themes directory not found:", themesDir);
         return [];
       }
 
@@ -114,33 +105,28 @@ export function registerThemeIpcHandlers() {
               type: themeData.type || "dark",
             });
           } catch (error) {
-            // console.error(`Failed to read theme ${file}:`, error);
           }
         }
       }
 
       return themes;
     } catch (error) {
-      // console.error("Failed to list themes:", error);
       return [];
     }
   });
 
-  // Load a specific theme
   ipcMain.handle("themes:load", async (_event, themeId: string): Promise<Theme | null> => {
     const themesDir = getUserThemesDirectory();
     const themePath = path.join(themesDir, `${themeId}.json`);
 
     try {
       if (!fs.existsSync(themePath)) {
-        // console.warn(`Theme file not found: ${themePath}`);
         return null;
       }
 
       const themeData = fs.readFileSync(themePath, "utf-8");
       return JSON.parse(themeData) as Theme;
     } catch (error) {
-      // console.error(`Failed to load theme ${themeId}:`, error);
       return null;
     }
   });

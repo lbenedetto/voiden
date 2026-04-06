@@ -488,7 +488,6 @@ const voidenRestApiPlugin = (context: PluginContext) => {
 
               return true;
             } catch (error) {
-              // console.error('[VOIDEN REST API] Error processing cURL:', error);
               return false;
             }
           },

@@ -65,15 +65,9 @@ function fixInlineCodeBlocks(markdown: string): string {
 
 export const prosemirrorToMarkdown = (content: string, schema: Schema) => {
   const doc = schema.nodeFromJSON(JSON.parse(content));
-  // console.debug("doc");
-  // console.debug(doc);
   const serializer = createMarkdownSerializer(schema);
   const markdown = serializer.serialize(doc);
-  // console.debug("before");
-  // console.debug(markdown);
   const sanitized = fixInlineCodeBlocks(markdown);
-  // console.debug("after");
-  // console.debug(sanitized);
 
   const markdownWithVersion = addVersionFrontmatter(sanitized);
   return markdownWithVersion;
@@ -519,7 +513,6 @@ export const saveTabById = async (tabId: string, options?: { silent?: boolean })
         // Tab is not active
         const currentFileContent = await window.electron?.files.read(tab.source);
         if (currentFileContent == null) {
-          // console.error(`Could not read file content for ${tab.source}`);
           return false;
         }
 
@@ -529,7 +522,6 @@ export const saveTabById = async (tabId: string, options?: { silent?: boolean })
 
         // Only save if content is actually different
         if (currentFileContent === unsavedMarkdown) {
-          // console.debug(`Tab ${tab.title} content is same as file, skipping save`);
           // Clear unsaved state since content matches file
           if (!shouldInvalidate) {
             syncTabContentCache(currentFileContent);
@@ -540,7 +532,6 @@ export const saveTabById = async (tabId: string, options?: { silent?: boolean })
           return true;
         }
 
-        // console.debug(`Tab ${tab.title} has changes, saving...`);
         if (shouldInvalidate) {
           return await saveFileUtil(tab.source, unsavedContent, "main", tabId, schema);
         }
@@ -559,13 +550,11 @@ export const saveTabById = async (tabId: string, options?: { silent?: boolean })
       // Read current file content from disk
       const currentFileContent = await window.electron?.files.read(tab.source);
       if (currentFileContent == null) {
-        // console.error(`Could not read file content for ${tab.source}`);
         return false;
       }
       
       // Only save if content is actually different
       if (currentFileContent === unsavedContent) {
-        // console.debug(`Tab ${tab.title} content is same as file, skipping save`);
         // Clear unsaved state since content matches file
         if (!shouldInvalidate) {
           syncTabContentCache(currentFileContent);
@@ -574,7 +563,6 @@ export const saveTabById = async (tabId: string, options?: { silent?: boolean })
         return true;
       }
       
-      // console.debug(`Tab ${tab.title} has changes, saving...`);
       await window.electron?.files.write(tab.source, unsavedContent);
       if (shouldInvalidate) {
         invalidateOnFileSave(tab.source, "main", tabId);
@@ -585,7 +573,6 @@ export const saveTabById = async (tabId: string, options?: { silent?: boolean })
       return true;
     }
   } catch (error) {
-    // console.error(`Error saving tab ${tabId}:`, error);
     return false;
   }
   
@@ -623,7 +610,6 @@ export const globalSaveFile = async () => {
           useEditorStore.getState().clearUnsaved(activeEditor.tabId);
           return true;
         } catch (error) {
-          // console.error("Error saving code file:", error);
           return false;
         }
       }
@@ -653,7 +639,6 @@ export const globalSaveFile = async () => {
         useEditorStore.getState().clearUnsaved(activeEditor.tabId);
         return true;
       } catch (error) {
-        // console.error("Error saving code file:", error);
         return false;
       }
     }

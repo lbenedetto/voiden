@@ -87,7 +87,6 @@ export class HookRegistry {
       try {
         await hook.handler(context);
       } catch (error) {
-        // console.error(`[HookRegistry] Error in hook ${hook.extensionId} at stage ${stage}:`, error);
         // Continue executing other hooks even if one fails
       }
     }

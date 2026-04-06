@@ -261,9 +261,6 @@ export const CodeEditor = ({
     const handleKeyboardShortcuts = (e: KeyboardEvent) => {
       const isModKey = e.metaKey || e.ctrlKey;
 
-      // DEBUG: Uncomment to see what keys are being captured
-      // console.log('Key event:', e.key, 'isModKey:', isModKey, 'target:', e.target);
-
       // Only intercept if modifier key is pressed
       // This allows normal typing without interference
       if (!isModKey) {
