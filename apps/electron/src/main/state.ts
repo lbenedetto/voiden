@@ -716,20 +716,34 @@ export const ipcStateHandlers = () => {
           };
         }
 
+        // Skip reading content for unsupported binary/media files
+        const UNSUPPORTED_EXTENSIONS = new Set([
+          "zip", "rar", "tar", "gz", "bz2", "7z", "xz", "tgz",
+          "exe", "dll", "so", "dylib", "app", "dmg", "pkg", "deb", "rpm", "msi", "apk",
+          "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "tiff", "tif", "psd", "heic", "avif",
+          "mp3", "mp4", "mov", "avi", "mkv", "wav", "flac", "ogg", "webm", "m4a", "m4v",
+          "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+          "class", "pyc", "o", "a", "lib",
+          "woff", "woff2", "ttf", "otf", "eot",
+          "db", "sqlite", "sqlite3",
+        ]);
+        const fileExt = source.split(".").pop()?.toLowerCase() ?? "";
+        if (UNSUPPORTED_EXTENSIONS.has(fileExt)) {
+          return { type: "document", tabId, title, content: null, source, unsupported: true };
+        }
+
         try {
-          let now = new Date();
-          let timeString = now.toLocaleTimeString("en-US", { hour12: false });
-          // console.debug("--------------------");
-          // console.debug(title);
-          // console.debug("--------------------");
-          // console.debug(timeString); // Example output: "14:30:15"
+          // For files larger than 5 MB, skip reading here entirely.
+          // The renderer will stream the content in chunks via files:readChunk
+          // so the IPC message never serialises a large string at once.
+          const STREAM_THRESHOLD = 5 * 1024 * 1024; // 5 MB
+          const stat = await fs.stat(source);
+          if (stat.size > STREAM_THRESHOLD) {
+            return { type: "document", tabId, title, content: null, source, streamable: true, fullSize: stat.size };
+          }
           const content = await fs.readFile(source, "utf8");
-          now = new Date();
-          timeString = now.toLocaleTimeString("en-US", { hour12: false });
-          // console.debug(timeString); // Example output: "14:30:15"
           return { type: "document", tabId, title, content, source };
         } catch (error) {
-          // console.error(`Failed to read file: ${source}`, error);
           return { type: "document", tabId, title, content: null, source };
         }
       }

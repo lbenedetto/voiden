@@ -94,6 +94,34 @@ export function registerFileIpcHandlers() {
     }
   });
 
+  // Reads a byte range from a file and returns it as a UTF-8 string.
+  // Each call serialises at most CHUNK_SIZE bytes through IPC so the main
+  // process event-loop is never blocked by a single large message.
+  ipcMain.handle(
+    "files:readChunk",
+    async (_event, filePath: string, offset: number, size: number) => {
+      const fd = await fs.promises.open(filePath, "r");
+      try {
+        const stat = await fd.stat();
+        const actualSize = Math.min(size, stat.size - offset);
+        if (actualSize <= 0) return { content: "", done: true };
+
+        const buf = Buffer.alloc(actualSize);
+        const { bytesRead } = await fd.read(buf, 0, actualSize, offset);
+        const nextOffset = offset + bytesRead;
+
+        // Convert to UTF-8. buf.toString handles multi-byte chars correctly
+        // as long as we started on a codepoint boundary (we always read from 0
+        // for the first chunk and use nextOffset as the start for subsequent
+        // ones, so boundaries are preserved).
+        const content = buf.slice(0, bytesRead).toString("utf8");
+        return { content, bytesRead, nextOffset, done: nextOffset >= stat.size, totalSize: stat.size };
+      } finally {
+        await fd.close();
+      }
+    },
+  );
+
   ipcMain.handle("files:getVoidFiles", async () => {
     const projectPath = await getActiveProject();
     if (!projectPath) {

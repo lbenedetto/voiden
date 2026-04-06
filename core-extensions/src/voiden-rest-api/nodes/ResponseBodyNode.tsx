@@ -117,7 +117,9 @@ export const createResponseBodyNode = (
     }, [body, isJson, isXml, isHtml, isText, isImage, isVideo, isAudio, isPdf]);
 
     const [showFullContent, setShowFullContent] = React.useState(false);
+    const [highlightEnabled, setHighlightEnabled] = React.useState(false);
     const isTruncated = !showFullContent && totalBodySize > TRUNCATE_THRESHOLD;
+    const showHighlightBtn = showFullContent && !highlightEnabled && totalBodySize > TRUNCATE_THRESHOLD;
 
     // Resize state for the response body code editor (must be at top level)
     const defaultHeight = Math.min(window.innerHeight * 0.6, 500);
@@ -539,10 +541,21 @@ export const createResponseBodyNode = (
             <div className="flex justify-end">
               <button
                 onClick={(e) => { e.stopPropagation(); setShowFullContent(true); }}
-                className="flex items-center shrink-0 whitespace-nowrap cursor-pointer px-4 py-2  text-accent"
+                className="flex items-center shrink-0 whitespace-nowrap cursor-pointer px-4 py-2 text-accent"
               >
                 Show full response
                 <ChevronDown size={14} className="ml-1" />
+              </button>
+            </div>
+          )}
+          {showHighlightBtn && (
+            <div className="flex items-center justify-end gap-3 px-3 py-1.5">
+              <span className="text-xs text-comment">Syntax highlighting is off for performance.</span>
+              <button
+                onClick={(e) => { e.stopPropagation(); setHighlightEnabled(true); }}
+                className="text-xs px-2 py-0.5 rounded border border-border text-comment hover:text-text hover:border-accent transition-colors shrink-0"
+              >
+                Enable highlighting
               </button>
             </div>
           )}
@@ -552,6 +565,7 @@ export const createResponseBodyNode = (
               lang={lang}
               value={displayedValue}
               showReplace={false}
+              forceHighlight={highlightEnabled}
             />
           </div>
           {/* Resize handle */}

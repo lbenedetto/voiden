@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
-import { useGetPanelTabs, useGetTabContent, useAddPanelTab, useActivateTab } from "@/core/layout/hooks";
+import { useGetPanelTabs, useGetTabContent, useAddPanelTab, useActivateTab, useClosePanelTab } from "@/core/layout/hooks";
+import { toast } from "@/core/components/ui/sonner";
 import { CodeEditor } from "@/core/editors/code/CodeEditor";
 import { ExtensionDetails } from "@/core/extensions/components/ExtensionDetails";
 import { VoidenEditor } from "@/core/editors/voiden/VoidenEditor";
@@ -364,12 +365,26 @@ const EmptyPanel = () => {
 
 const PanelContentInner = ({ panelId }: { panelId: string }) => {
   const MAX_CACHED_DOCUMENT_EDITORS = 8;
-  const { data: tabContent } = useGetTabContent(panelId);
+  const { data: tabContent, error: tabContentError } = useGetTabContent(panelId);
   const panel = usePluginStore((state) => state.panels[panelId]);
   const { data: tabs } = useGetPanelTabs(panelId);
+  const { mutate: closePanelTab } = useClosePanelTab();
   const editorActions = usePluginStore((state) => state.editorActions);
   const { settings } = useSettings();
   const activeEditor = useCodeEditorStore((state) => state.activeEditor);
+
+  // If tab content load times out (30s), close the tab and show a toast
+  useEffect(() => {
+    if (!tabContentError) return;
+    const err = tabContentError as Error;
+    if (err.message !== "TAB_LOAD_TIMEOUT") return;
+    const activeTabId = tabs?.activeTabId;
+    if (!activeTabId) return;
+    closePanelTab({ panelId, tabId: activeTabId });
+    toast.warning("File too large to render", {
+      description: "Removed the tab for better performance.",
+    });
+  }, [tabContentError, tabs?.activeTabId, panelId, closePanelTab]);
 
   // Subscribe to unsaved Voiden editor content for the active tab so predicates
   // are re-evaluated whenever the editor content changes (not just on file save).
@@ -570,10 +585,12 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
                 ) : (
                   <CodeEditor
                     tabId={docTab.tabId}
-                    content={docTab.content}
+                    content={docTab.content ?? ""}
                     source={docTab.source}
                     panelId={panelId}
                     isActive={docTab.tabId === activeDocTabContent?.tabId}
+                    streamable={docTab.streamable}
+                    fullSize={docTab.fullSize}
                   />
                 )}
               </div>
@@ -622,7 +639,12 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
   }
 
   if (tabContent.type === "document") {
-    if (tabContent.content === null) return <div>This file is not available</div>;
+    if (tabContent.content === null && !tabContent.streamable) {
+      if (isBinaryFile(tabContent.source || tabContent.title)) {
+        return <UnsupportedFile title={tabContent.title} />;
+      }
+      return <div>This file is not available</div>;
+    }
     return <>{cachedEditorsBlock}</>;
   }
 

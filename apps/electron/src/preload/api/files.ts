@@ -9,6 +9,8 @@ export const filesApi = {
   flatList: (rootDir: string, query?: string): Promise<{ name: string; path: string }[]> =>
     ipcRenderer.invoke("files:flatList", rootDir, query),
   read: (path: string) => ipcRenderer.invoke("files:read", path),
+  readChunk: (path: string, offset: number, size: number): Promise<{ content: string; bytesRead: number; nextOffset: number; done: boolean; totalSize: number }> =>
+    ipcRenderer.invoke("files:readChunk", path, offset, size),
   write: (path: string, content: string, tabId?: string) =>
     ipcRenderer.invoke("files:write", path, content, tabId),
   createVoid: (projectName: string, fileName: string): Promise<string> =>

@@ -152,6 +152,8 @@ interface CodeEditorProps {
   showReplace?: boolean;
   /** Optional lint function — called with editor content, returns diagnostics shown inline. */
   validateFn?: (content: string) => ScriptDiagnostic[];
+  /** Force syntax highlighting even when content exceeds the very-large threshold. */
+  forceHighlight?: boolean;
 }
 
 export const CodeEditor = ({
@@ -163,6 +165,7 @@ export const CodeEditor = ({
   autofocus = false,
   showReplace = true,
   validateFn,
+  forceHighlight = false,
 }: CodeEditorProps) => {
   const isRenaming = useFocusStore((state) => state.isRenaming);
 
@@ -348,7 +351,7 @@ export const CodeEditor = ({
     }),
     // Very large content: skip syntax highlight entirely (lezer parses the full doc)
     // Large content: keep highlight but skip the linter (expensive on huge files)
-    ...(isVeryLargeContent ? [] : renderLang(lang, isLargeContent)),
+    ...((isVeryLargeContent && !forceHighlight) ? [] : renderLang(lang, isLargeContent)),
     // Disable env-variable decorations for large content — needlessly scans full doc
     ...(isLargeContent ? [] : [createHighlightPlugin(activeEnvData, processData)]),
     // Indentation support
