@@ -32,7 +32,6 @@ export const pluginsApi = {
     try {
       return await ipcRenderer.invoke("plugins:list");
     } catch (error) {
-      // console.error("Error in plugins.get:", error);
       return [];
     }
   },

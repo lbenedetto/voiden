@@ -24,7 +24,6 @@ export async function expandLinkedBlocks(
 ): Promise<JSONContent> {
   // Safety check to prevent infinite recursion
   if (depth > 10) {
-    // console.warn('[expandLinkedBlocks] Max recursion depth reached');
     return json;
   }
 
@@ -70,7 +69,6 @@ export async function expandLinkedBlocks(
       }
 
       if (!blockContent || typeof blockContent !== "object") {
-        // console.warn(`[expandLinkedBlocks] Could not resolve linkedBlock ${blockUid}`);
         return json;
       }
 

@@ -31,17 +31,14 @@ export const PasteHandler = Extension.create({
         key: pasteHandlerPluginKey,
         props: {
           handlePaste(view, event) {
-            // console.debug('[PasteHandler] Paste event intercepted');
 
             // Delegate to the paste orchestrator
             const handled = pasteOrchestrator.handlePaste(view, event);
 
             if (handled) {
-              // console.debug('[PasteHandler] Paste handled by orchestrator');
               return true;
             }
 
-            // console.debug('[PasteHandler] Paste not handled, using default behavior');
             return false;
           },
         },

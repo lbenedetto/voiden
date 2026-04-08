@@ -1,6 +1,7 @@
 // CodeEditor.tsx
 import { search, highlightSelectionMatches, searchKeymap, closeSearchPanel } from '@codemirror/search';
-import { useCallback, useMemo, useState, useEffect, useLayoutEffect, memo } from "react";
+import { useCallback, useMemo, useState, useEffect, useLayoutEffect, memo, useRef } from "react";
+import { Compartment } from "@codemirror/state";
 import ReactCodeMirror from "@uiw/react-codemirror";
 import { EditorView, keymap } from "@codemirror/view";
 import { useEditorStore } from "../voiden/VoidenEditor";
@@ -34,6 +35,8 @@ interface CodeEditorProps {
   source: string; // The file path used for saving and determining the language.
   panelId: string;
   isActive?: boolean;
+  streamable?: boolean; // File is too large for a single IPC read — stream it in chunks
+  fullSize?: number;    // Total file size in bytes (used for progress display)
 }
 
 // File size threshold for performance optimizations (5MB)
@@ -334,8 +337,13 @@ const getLanguageExtension = (filename: string) => {
   }
 };
 
-export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = true }: CodeEditorProps) => {
+export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = true, streamable, fullSize }: CodeEditorProps) => {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
+  const [streamProgress, setStreamProgress] = useState<number | null>(streamable ? 0 : null);
+  const [canHighlight, setCanHighlight] = useState(false); // show highlight button after stream completes
+  const [highlighted, setHighlighted] = useState(false);
+  // Stable compartment for dynamic language reconfiguration
+  const langCompartment = useRef(new Compartment()).current;
 
   // const isRenaming = useFocusStore((state) => state.isRenaming);
   const { setUnsaved, clearUnsaved, setScrollPosition, getScrollPosition } = useEditorStore((state) => ({
@@ -347,11 +355,64 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
 
   const { setActiveEditor, updateContent, setEditor } = useCodeEditorStore();
 
+  // Determine the language extension based on file extension — declared early so the
+  // streaming effect below can reference it without a temporal dead zone error.
+  const langExt = useMemo(() => {
+    const ext = getLanguageExtension(source);
+    return ext ?? null;
+  }, [source]);
+
   // Detect if this is a large file
   const isLargeFile = useMemo(() => {
+    if (streamable) return true; // streamed files are always "large" — no highlighting
     const sizeInBytes = new Blob([content]).size;
     return sizeInBytes > LARGE_FILE_THRESHOLD;
-  }, [content]);
+  }, [content, streamable]);
+
+  // Stream large file content in 512 KB chunks so the main-process IPC never
+  // serialises a huge string at once and the renderer stays responsive.
+  useEffect(() => {
+    if (!streamable || !source || !editorView) return;
+
+    const CHUNK = 512 * 1024; // 512 KB per IPC call
+    let cancelled = false;
+
+    (async () => {
+      let offset = 0;
+
+      while (!cancelled) {
+        const result = await window.electron?.files.readChunk(source, offset, CHUNK);
+        if (cancelled || !result) break;
+
+        const { content: chunk, bytesRead, done, totalSize } = result;
+
+        if (chunk) {
+          editorView.dispatch({
+            changes: { from: editorView.state.doc.length, insert: chunk },
+          });
+        }
+
+        offset += bytesRead;
+
+        // Update progress bar (0–100)
+        if (fullSize || totalSize) {
+          setStreamProgress(Math.min(100, Math.round((offset / (fullSize ?? totalSize)) * 100)));
+        }
+
+        if (done) break;
+
+        // Yield to the event loop between chunks — keeps the UI responsive
+        await new Promise<void>((r) => setTimeout(r, 0));
+      }
+
+      if (!cancelled) {
+        setStreamProgress(null); // hide progress bar
+        if (langExt) setCanHighlight(true); // offer highlight button if language is known
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [streamable, source, editorView, fullSize, langExt]);
 
   // Create debounced update function for large files
   const debouncedUpdate = useMemo(
@@ -498,12 +559,10 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
     [tabId, content, setUnsaved, clearUnsaved, updateContent, isLargeFile, debouncedUpdate],
   );
 
-  // Determine the language extension based on the file extension of the source.
-  // For large files, disable syntax highlighting to improve performance
   const languageExtension = useMemo(() => {
-    const ext = getLanguageExtension(source);
-    return ext ? [ext] : [];
-  }, [source, isLargeFile]);
+    // Wrap in compartment so we can hot-swap it later without remounting
+    return [langCompartment.of(isLargeFile ? [] : (langExt ? [langExt] : []))];
+  }, [isLargeFile, langExt, langCompartment]);
 
   // TODO: this should be refactored into a separate plugin
   // Disable linting for large files to improve performance
@@ -545,19 +604,53 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
     return baseExtensions;
   }, [languageExtension, lintExtension, isLargeFile]);
 
+  const handleEnableHighlight = useCallback(() => {
+    if (!editorView || !langExt) return;
+    editorView.dispatch({
+      effects: langCompartment.reconfigure([langExt]),
+    });
+    setCanHighlight(false);
+    setHighlighted(true);
+  }, [editorView, langExt, langCompartment]);
+
   return (
-    <div className="relative txt-editor">
-      <ReactCodeMirror
-        autoFocus={initialContent.length === 0}
-        // readOnly={isRenaming}
-        value={initialContent}
-        theme={voidenTheme}
-        onChange={onChange}
-        onFocus={handleFocus}
-        extensions={extensions}
-        onCreateEditor={onCreateEditor}
-        basicSetup={basicSetupOptions}
-      />
+    <div className="relative txt-editor flex flex-col h-full">
+      {streamProgress !== null && (
+        <div className="flex items-center gap-3 px-3 py-1.5 bg-active border-b border-border flex-shrink-0 select-none">
+          <div className="flex-1 h-1 bg-border rounded-full overflow-hidden">
+            <div
+              className="h-full bg-accent transition-all duration-150"
+              style={{ width: `${streamProgress}%` }}
+            />
+          </div>
+          <span className="text-xs text-comment whitespace-nowrap">
+            {streamProgress < 100 ? `Loading… ${streamProgress}%` : "Loaded"}
+          </span>
+        </div>
+      )}
+      {canHighlight && !highlighted && (
+        <div className="flex items-center gap-3 px-3 py-1.5 bg-active border-b border-border flex-shrink-0 select-none">
+          <span className="text-xs text-comment flex-1">File loaded. Syntax highlighting is off for performance.</span>
+          <button
+            onClick={handleEnableHighlight}
+            className="text-xs px-2 py-0.5 rounded border border-border text-comment hover:text-text hover:border-accent transition-colors"
+          >
+            Enable highlighting
+          </button>
+        </div>
+      )}
+      <div className="flex-1 min-h-0">
+        <ReactCodeMirror
+          autoFocus={false}
+          value={initialContent}
+          theme={voidenTheme}
+          onChange={streamable ? undefined : onChange}
+          onFocus={handleFocus}
+          extensions={extensions}
+          onCreateEditor={onCreateEditor}
+          basicSetup={basicSetupOptions}
+        />
+      </div>
     </div>
   );
 });

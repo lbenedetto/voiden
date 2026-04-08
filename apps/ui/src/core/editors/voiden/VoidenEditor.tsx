@@ -666,10 +666,18 @@ const VoidenEditorInner = ({
             editor.commands.setContent(fallbackContent, false);
           }
 
-          // Populate saved-content ref so unsaved detection works after load
           try {
             savedContentJSONRef.current = JSON.stringify(santizedContent);
-          } catch { /* ignore */ }
+          } catch {  }
+
+          // Rebuild env/variable/faker highlight decorations.
+          if (!editor.isDestroyed) {
+            editor.view.dispatch(
+              editor.view.state.tr
+                .setMeta("forceHighlightUpdate", true)
+                .setMeta("forceVariableHighlightUpdate", true)
+            );
+          }
 
           setIsLoadingContent(false);
 
@@ -748,6 +756,14 @@ const VoidenEditorInner = ({
               } else {
                 // All chunks inserted — finalise exactly like applyContent does.
                 try { savedContentJSONRef.current = JSON.stringify(santizedContent); } catch { /* ignore */ }
+                // Rebuild highlight decorations now that the full document is in place.
+                if (!editor.isDestroyed) {
+                  editor.view.dispatch(
+                    editor.view.state.tr
+                      .setMeta("forceHighlightUpdate", true)
+                      .setMeta("forceVariableHighlightUpdate", true)
+                  );
+                }
                 setIsLoadingContent(false);
                 if (!unsaved && savedScrollTop === 0) {
                   requestAnimationFrame(() => {

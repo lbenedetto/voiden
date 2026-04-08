@@ -8,7 +8,6 @@ export function prettifyJSON(json: string) {
     const parsedJSON = JSON.parse(json);
     return JSON.stringify(parsedJSON, null, 2);
   } catch (error) {
-    // console.error("Error prettifying JSON:", error);
     return json;
   }
 }

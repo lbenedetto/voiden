@@ -109,17 +109,14 @@ export async function saveOnboardingState(value: boolean): Promise<void> {
 }
 const AUTOSAVE_DIR = path.join(app.getPath("userData"), "autosave");
 
-// Load or initialize state
 export async function loadState(skipDefault?: boolean): Promise<AppState> {
   try {
     const STATE_FILE = windowManager.getStateFilePath();
     const data = await fs.readFile(STATE_FILE, "utf8");
     const state = JSON.parse(data) as AppState;
 
-    // Onboarding is managed by a dedicated file — override whatever is in the state.
     state.onboarding = await loadOnboardingState();
 
-    // Migration: Add git source control tab if it doesn't exist
     if (
       state.sidebars?.left &&
       !state.sidebars.left.tabs.some((tab) => tab.type === "gitSourceControl")
@@ -135,9 +132,6 @@ export async function loadState(skipDefault?: boolean): Promise<AppState> {
 
     return state;
   } catch (err) {
-    // console.warn("Could not load state file, using default state", err);
-
-    // Create a new state for first launch or recovery
     const defaultState = await getDefaultState(skipDefault);
     defaultState.id = windowManager.activeWindowId;
     defaultState.onboarding = await loadOnboardingState();
@@ -146,32 +140,27 @@ export async function loadState(skipDefault?: boolean): Promise<AppState> {
   }
 }
 
-// Save state to file.
-export async function saveState(state: AppState): Promise<void> {
-  const STATE_FILE = windowManager.getStateFilePath();
+export async function saveState(state: AppState, windowId?: string): Promise<void> {
+  const STATE_FILE = windowManager.getStateFilePath(windowId);
   await fs.writeFile(STATE_FILE, JSON.stringify({ ...state }, null, 2), "utf8");
 }
 
 export async function loadSettings(): Promise<AppSettings> {
   try {
-    // Check if the settings file exists
     const fileExists = await fs
       .access(SETTINGS_FILE)
       .then(() => true)
       .catch(() => false);
 
     if (!fileExists) {
-      // console.warn("Settings file not found, creating default settings.");
       const defaultSettings = getDefaultSettings();
       await saveSettings(defaultSettings);
       return defaultSettings;
     }
 
-    // If the file exists, read and parse it
     const data = await fs.readFile(SETTINGS_FILE, "utf8");
     return JSON.parse(data) as AppSettings;
   } catch (err) {
-    // console.warn("Error reading settings file, creating default settings.", err);
     const defaultSettings = getDefaultSettings();
     await saveSettings(defaultSettings);
     return defaultSettings;
@@ -287,12 +276,10 @@ export function getDefaultLayout() {
   } as PanelElement;
 }
 
-// Ensure autosave directory exists
 export async function ensureAutosaveDir() {
   try {
     await fs.mkdir(AUTOSAVE_DIR, { recursive: true });
   } catch (err) {
-    // console.error("Failed to create autosave directory:", err);
   }
 }
 

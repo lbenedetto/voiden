@@ -168,9 +168,7 @@ export async function createVoidFile(
 
   let finalName = fileName.endsWith(".void") ? fileName : fileName + ".void";
   let counter = 1;
-  // console.debug("create voiden files");
 
-  // Check if file exists and generate new name if needed
   while (fs.existsSync(path.join(filePath, finalName))) {
     const ext = path.extname(fileName);
     const baseName = path.basename(fileName, ext);
@@ -181,7 +179,6 @@ export async function createVoidFile(
   const fullPath = path.join(filePath, finalName);
   await fs.promises.writeFile(fullPath, "");
   windowManager.browserWindow?.webContents.send("files:tree:changed", null);
-  // eventBus.emitEvent("files:tree:changed",null);
   return { path: fullPath, name: finalName };
 }
 
@@ -386,7 +383,7 @@ export async function findVoidenProjects() {
       }
     }
   } catch (err) {
-    // console.error("Error scanning Voiden directory:", err);
+    // ignore
   }
 
   return result;

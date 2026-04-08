@@ -4,8 +4,6 @@
  * Spawns fileWatcher.worker.ts in an Electron UtilityProcess so chokidar's
  * initial directory scan runs in a separate OS process and never stalls the
  * main-process event loop (tabs, IPC, window creation all stay responsive).
- *
- * All public exports keep the same signature as before — callers don't change.
  */
 
 import path from "node:path";
@@ -19,7 +17,6 @@ import { logger } from "./logger";
 let watcherProc: UtilityProcess | null = null;
 
 function getWorkerPath(): string {
-  // Vite builds the worker to the same directory as main.js (.vite/build/)
   return path.join(__dirname, "fileWatcher.worker.js");
 }
 

@@ -25,11 +25,9 @@ ipcMain.handle("voiden-wrapper:getApyFiles", async (_, directory: string) => {
       return results;
     }
 
-    // Start the recursive file collection.
     const documents = await getFilesRecursively(directory);
     return documents;
   } catch (error) {
-    // console.error("Error fetching .void files:", error);
     throw error;
   }
 });

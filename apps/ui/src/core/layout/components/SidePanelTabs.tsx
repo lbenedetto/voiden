@@ -37,7 +37,6 @@ const renderLucideIcon = (iconName: string | undefined, size: number = 14) => {
   const IconComponent = icons[iconName];
 
   if (!IconComponent) {
-    // console.warn(`Icon "${iconName}" not found in lucide-react, using fallback`);
     return <Blocks size={size} />;
   }
 

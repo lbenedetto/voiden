@@ -334,7 +334,6 @@ async function parseBodyFromBytes(bytes: Buffer, contentType: string | null): Pr
     try {
       return JSON.parse(bytes.toString());
     } catch (error) {
-      // console.error("Failed to parse JSON:", error);
       // Fallback to returning the raw string if JSON parsing fails.
       return bytes.toString();
     }
@@ -557,7 +556,6 @@ export const updateLocalStorageValue = (testRunnerResult: TestRunnerResult, envi
       return;
     }
   } catch (error) {
-    // console.debug(error);
   }
 };
 
@@ -845,7 +843,6 @@ export async function sendRequestSecure(
       undefined
     );
   } catch (error) {
-    // console.error("[sendRequestSecure] Error:", error);
     return buildBaseResponse(0, "", {}, null, null, "", 0, error.message);
   }
 }

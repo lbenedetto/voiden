@@ -146,7 +146,6 @@ export const createXMLNode = (NodeViewWrapper: any, CodeEditor: any, RequestBloc
         const prettified = prettifyXML(currentValue);
         props.updateAttributes({ body: prettified });
       } catch (error) {
-        // console.error('[XMLNode] Prettify error:', error);
       }
     };
 

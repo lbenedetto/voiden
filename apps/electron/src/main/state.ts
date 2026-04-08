@@ -41,7 +41,6 @@ function maybeRecomposeSkills(state: AppState): void {
   }
 }
 
-// Declare global state variables.
 let appState: AppState;
 let appSettings: AppSettings;
 let extensionManager: ExtensionManager;
@@ -53,7 +52,6 @@ export const updateWindowState = () => {
     // Window state may not be available yet during initialization
   }
 };
-// Initialize state and settings on startup.
 export const initializeState = async (
   skipDefault?: boolean,
 ): Promise<AppState> => {
@@ -83,13 +81,11 @@ export const initializeState = async (
     appState.sidebars.left.tabs.push({ id: crypto.randomUUID(), type: "globalHistory" });
   }
 
-  // Initialize extension manager after the state is loaded.
   const t1 = Date.now();
   extensionManager = new ExtensionManager(appState);
   await extensionManager.loadInstalledCommunityExtensions();
   logger.perf('system', 'STARTUP [2/5] loadInstalledCommunityExtensions complete', Date.now() - t1);
 
-  // Save state after syncing extensions to persist any new core extensions
   const t2 = Date.now();
   await saveState(appState);
   logger.perf('system', 'STARTUP [3/5] saveState complete', Date.now() - t2);
@@ -109,10 +105,7 @@ export const initializeState = async (
     });
   }
 
-  // Collect all tab IDs from the state for cleanup
   const activeTabIds = new Set<string>();
-
-  // Helper to collect tab IDs from a layout
   const collectTabIds = (layout: PanelElement) => {
     if (layout.type === "panel") {
       layout.tabs.forEach((tab) => {
@@ -125,17 +118,12 @@ export const initializeState = async (
     }
   };
 
-  // Collect from all directory layouts
   Object.values(appState.directories).forEach((dir) => {
     if (dir.layout) collectTabIds(dir.layout);
   });
-
-  // Collect from unsaved layout
   if (appState.unsaved?.layout) {
     collectTabIds(appState.unsaved.layout);
   }
-
-  // Clean up autosaved files that are no longer referenced
   await cleanupAutosaveFiles(activeTabIds);
 
   logger.perf('system', 'STARTUP [5/5] initializeState complete', Date.now() - startupTimer, {
@@ -145,7 +133,6 @@ export const initializeState = async (
   return appState;
 };
 
-// Update getAppState to return the loaded state.
 export const getAppState = (event?: IpcMainInvokeEvent): AppState => {
   let windowId = windowManager.activeWindowId;
   if (event && event.sender) {
@@ -166,7 +153,6 @@ function getPanelTabs(layout: PanelElement, panelId: string): Tab[] | null {
     if (layout.id === panelId) return layout.tabs;
     return null;
   }
-  // it's a group so loop its children
   for (const child of layout.children) {
     const result = getPanelTabs(child, panelId);
     if (result) return result;
@@ -212,10 +198,8 @@ export function activateTabInLayout(
 ): boolean {
   if (layout.type === "panel") {
     if (layout.id === panelId) {
-      // Optionally, check if the tab exists in this panel before activating.
       const tabExists = layout.tabs.some((tab) => tab.id === tabId);
       if (!tabExists) {
-        // console.error(`Tab with id ${tabId} not found in panel ${panelId}`);
         return false;
       }
       layout.activeTabId = tabId;
@@ -223,7 +207,6 @@ export function activateTabInLayout(
     }
     return false;
   }
-  // For a group, iterate over its children.
   for (const child of layout.children) {
     if (activateTabInLayout(child, panelId, tabId)) {
       return true;
@@ -232,7 +215,6 @@ export function activateTabInLayout(
   return false;
 }
 
-// Add these helper functions at the top level
 export function findTabInPanel(
   layout: PanelElement,
   panelId: string,
@@ -322,7 +304,6 @@ export function reorderTabs(
   return layout;
 }
 
-// Add this helper function at the top level
 export function removeTabFromPanel(
   layout: PanelElement,
   panelId: string,
@@ -359,20 +340,15 @@ function removeExtensionTabsFromLayout(
   extensionId: string,
 ): void {
   if (layout.type === "panel") {
-    // Filter out any tabs that were created by the extension.
     const remainingTabs = layout.tabs.filter(
       (tab) => !(tab.meta?.extensionId === extensionId),
     );
-    // Update the panel's tabs.
     layout.tabs = remainingTabs;
-    // If the current activeTabId no longer exists in the filtered list,
-    // update it to the first available tab (or null if none exist).
     if (!remainingTabs.some((tab) => tab.id === layout.activeTabId)) {
       layout.activeTabId =
         remainingTabs.length > 0 ? remainingTabs[0].id : null;
     }
   } else if (layout.type === "group") {
-    // Recursively update all children.
     for (const child of layout.children) {
       removeExtensionTabsFromLayout(child, extensionId);
     }
@@ -394,7 +370,6 @@ function removeExtensionTabsFromSidebars(
     const filteredTabs = sidebar.tabs.filter(
       (tab) => !(tab.meta?.extensionId === extensionId),
     );
-    // Update activeTabId if the current active tab was removed.
     if (
       sidebar.activeTabId &&
       !filteredTabs.some((tab) => tab.id === sidebar.activeTabId)
@@ -430,29 +405,24 @@ async function saveDocument(
   unsavedContent: string,
 ): Promise<boolean> {
   if (closingTab.source) {
-    // If we already have a file path, save directly.
     try {
       await fs.writeFile(closingTab.source, unsavedContent, "utf8");
       return true;
     } catch (error) {
-      // console.error("Error saving file:", error);
       return false;
     }
   } else {
-    // No file path available, so ask the user where to save via a "Save As" dialog.
     const { canceled, filePath } = await dialog.showSaveDialog({
       title: "Save Document",
-      defaultPath: closingTab.title, // use the current title as a default file name
+      defaultPath: closingTab.title,
     });
     if (!canceled && filePath) {
       try {
         await fs.writeFile(filePath, unsavedContent, "utf8");
-        // Optionally update the tab metadata with the new file path and title.
         closingTab.source = filePath;
         closingTab.title = filePath.split(/[\\/]/).pop() || closingTab.title;
         return true;
       } catch (error) {
-        // console.error("Error saving file:", error);
         return false;
       }
     }
@@ -508,17 +478,13 @@ export async function removeProjectFromList(projectPath: string) {
 }
 
 export async function createNewDocumentTab() {
-  // 1. Get the active directory (if applicable).
   const activeDirectory = await getActiveProject();
-
-  // 2. Retrieve the current app state and determine the layout.
   const appState = getAppState();
   const layout = appState.activeDirectory
     ? appState.directories[appState.activeDirectory]?.layout
     : appState.unsaved.layout;
 
   if (!layout) {
-    // console.error("No layout found.");
     return;
   }
   const createNewTabWithIncrement = (): Tab => {
@@ -549,25 +515,17 @@ export async function createNewDocumentTab() {
     const newTab = {
       id: crypto.randomUUID(),
       type: "document",
-      title: fileName, // Default title until saved.
-      source: null, // No file path yet since we're not writing to disk.
+      title: fileName,
+      source: null,
       directory: activeDirectory,
     };
     return newTab;
   };
-  // 3. Create a new Tab object for the document without creating a file on disk.
   const newTab: Tab = createNewTabWithIncrement();
-
-  // 4. Add the new tab to the main panel and activate it.
   addTabToPanel(layout, "main", newTab);
   activateTabInLayout(layout, "main", newTab.id);
-
-  // 5. Save the updated application state.
   await saveState(appState);
-
-  // 6. Emit an event indicating a new document tab has been created.
   windowManager.browserWindow?.webContents.send("file:newTab", { tab: newTab });
-  // eventBus.emitEvent("file:newTab", { tab: newTab });
 }
 
 export function getActiveTab(panelId: string): Tab | null {
@@ -596,19 +554,16 @@ export async function addPanelTab(
     throw new Error("No layout found to add tab.");
   }
 
-  // Check if tab already exists
   const existingTab = findTabInPanel(layout, panelId, tab);
   if (existingTab) {
     return { tabId: existingTab.id, alreadyExists: true };
   }
 
-  // Add new tab
   const added = addTabToPanel(layout, panelId, tab);
   if (!added) {
     throw new Error(`Panel with id ${panelId} not found.`);
   }
 
-  // Save the updated state to file.
   await saveState(state);
   return { tabId: tab.id, alreadyExists: false, panelId };
 }
@@ -620,7 +575,6 @@ export async function activateTab(
 ): Promise<any> {
   const appState = getAppState(event);
 
-  // Determine which layout to update (active directory or unsaved)
   const layout = appState.activeDirectory
     ? appState.directories[appState.activeDirectory]?.layout
     : appState.unsaved.layout;
@@ -629,7 +583,6 @@ export async function activateTab(
     throw new Error("No layout found to update the active tab.");
   }
 
-  // Attempt to activate the tab in the layout.
   const updated = activateTabInLayout(layout, panelId, tabId);
   if (!updated) {
     throw new Error(
@@ -637,7 +590,6 @@ export async function activateTab(
     );
   }
 
-  // Optionally, you can log or return the updated layout.
   await saveState(appState);
   return { panelId, tabId };
 }
@@ -659,35 +611,24 @@ export const ipcStateHandlers = () => {
   });
 
   ipcMain.handle("state:openProject", async (event, defaultPath: string) => {
-    // Get the window that sent the IPC call.
     const browserWindow = BrowserWindow.fromWebContents(event.sender);
-
-    // Open a native dialog using the default path provided.
     const result = await dialog.showOpenDialog(browserWindow, {
-      defaultPath, // e.g. "~/" passed from the renderer
+      defaultPath,
       properties: ["openDirectory", "createDirectory"],
     });
 
-    // If the user did not cancel and selected a folder...
     if (!result.canceled && result.filePaths.length > 0) {
       const projectPath = result.filePaths[0];
 
       if (windowManager.focusWindowByProject(projectPath)) {
         return;
       }
-      // Set the active project (your existing logic)
       await setActiveProject(projectPath);
-
-      // Emit an event to notify renderers that the folder has been opened.
       windowManager.browserWindow?.webContents.send("folder:opened", {
         path: projectPath,
       });
-      // eventBus.emitEvent("folder:opened", { path: projectPath });
-
-      // Return the selected path back to the renderer.
       return projectPath;
     } else {
-      // Optionally, you can either return a value indicating cancellation or throw an error.
       throw new Error("Project selection was canceled");
     }
   });
@@ -703,10 +644,7 @@ export const ipcStateHandlers = () => {
         return { type: "logs", tabId, title };
       case "document": {
         if (!source) {
-          // Try to load autosaved content for unsaved files
           const autosavedContent = await loadAutosaveFile(tabId);
-          // Autosaved content is already in JSON format (editor's getJSON output)
-          // We need to return it as-is, not as a string
           return {
             type: "document",
             tabId,
@@ -716,33 +654,42 @@ export const ipcStateHandlers = () => {
           };
         }
 
+        // Skip reading content for unsupported binary/media files
+        const UNSUPPORTED_EXTENSIONS = new Set([
+          "zip", "rar", "tar", "gz", "bz2", "7z", "xz", "tgz",
+          "exe", "dll", "so", "dylib", "app", "dmg", "pkg", "deb", "rpm", "msi", "apk",
+          "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "tiff", "tif", "psd", "heic", "avif",
+          "mp3", "mp4", "mov", "avi", "mkv", "wav", "flac", "ogg", "webm", "m4a", "m4v",
+          "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+          "class", "pyc", "o", "a", "lib",
+          "woff", "woff2", "ttf", "otf", "eot",
+          "db", "sqlite", "sqlite3",
+        ]);
+        const fileExt = source.split(".").pop()?.toLowerCase() ?? "";
+        if (UNSUPPORTED_EXTENSIONS.has(fileExt)) {
+          return { type: "document", tabId, title, content: null, source, unsupported: true };
+        }
+
         try {
-          let now = new Date();
-          let timeString = now.toLocaleTimeString("en-US", { hour12: false });
-          // console.debug("--------------------");
-          // console.debug(title);
-          // console.debug("--------------------");
-          // console.debug(timeString); // Example output: "14:30:15"
+          // For files larger than 5 MB, skip reading here entirely.
+          // The renderer will stream the content in chunks via files:readChunk
+          // so the IPC message never serialises a large string at once.
+          const STREAM_THRESHOLD = 5 * 1024 * 1024; // 5 MB
+          const stat = await fs.stat(source);
+          if (stat.size > STREAM_THRESHOLD) {
+            return { type: "document", tabId, title, content: null, source, streamable: true, fullSize: stat.size };
+          }
           const content = await fs.readFile(source, "utf8");
-          now = new Date();
-          timeString = now.toLocaleTimeString("en-US", { hour12: false });
-          // console.debug(timeString); // Example output: "14:30:15"
           return { type: "document", tabId, title, content, source };
         } catch (error) {
-          // console.error(`Failed to read file: ${source}`, error);
           return { type: "document", tabId, title, content: null, source };
         }
       }
       case "terminal":
         return { type: "terminal", tabId, title, source };
-      // case "settings":
-      //   // return settings content; this could be read from a config file or similar
-      //   return JSON.stringify(getAppSettings());
-      // add additional tab types here
       case "settings":
         return { type: "settings", tabId, title, content: "settings" };
 
-      // Handle extension-related tabs
       case "extensionDetails": {
         if (!tab.meta?.extensionId) {
           throw new Error(
@@ -750,12 +697,10 @@ export const ipcStateHandlers = () => {
           );
         }
         const appState = getAppState();
-        // First try to find the extension in our local app state.
         let extension = appState.extensions.find(
           (ext) => ext.id === tab.meta!.extensionId,
         );
         if (!extension) {
-          // If not found locally, fetch remote extensions.
           const remoteExtensions = await getRemoteExtensions();
           extension = remoteExtensions.find(
             (ext) => ext.id === tab.meta!.extensionId,
@@ -767,7 +712,6 @@ export const ipcStateHandlers = () => {
           );
         }
 
-        // Use the readme field from the manifest (shipped with the release)
         const content = extension.readme || "";
 
         return {
@@ -780,8 +724,6 @@ export const ipcStateHandlers = () => {
         };
       }
       case "custom": {
-        // This branch could be used if you have an interactive extension view.
-        // For now, we return a placeholder; you can extend this as your architecture evolves.
         if (!tab.meta?.extensionId) {
           throw new Error("Missing extensionId in tab meta for extension tab");
         }
@@ -796,7 +738,6 @@ export const ipcStateHandlers = () => {
       }
 
       case "diff": {
-        // Git branch diff viewer
         return {
           type: "diff",
           tabId,
@@ -807,7 +748,6 @@ export const ipcStateHandlers = () => {
       }
 
       case "conflict": {
-        // Git merge conflict resolver
         return {
           type: "conflict",
           tabId,
@@ -886,7 +826,6 @@ export const ipcStateHandlers = () => {
     "sidebar:activateTab",
     async (event, sidebarId: "left" | "right", tabId: string) => {
       const appState = getAppState(event);
-      // Update the active tab in the sidebars state
       appState.sidebars[sidebarId].activeTabId = tabId;
       await saveState(appState);
       return { sidebarId, tabId };
@@ -896,33 +835,30 @@ export const ipcStateHandlers = () => {
   ipcMain.handle(
     "state:renameFile",
     async (event, oldPath: string, newName: string) => {
-      // Call the filesystem rename function.
       const result = await renameFileOrDirectory(oldPath, newName);
       if (!result.success) {
-        // Return error details if the rename failed.
         return result;
       }
 
-      // Get the new path from the filesystem operation.
       const newPath = result.data.path;
-
-      // Check if renamed item is a directory
       const isDirectory = fsSync.statSync(newPath).isDirectory();
-
-      // Get the current application state.
       const appState = getAppState(event);
 
-      // Define a helper to recursively update tabs in a layout.
-      // Handles both direct file renames and folder renames (which should update all files under the folder).
       const updateTabsInLayout = (layout: PanelElement) => {
         if (layout.type === "panel") {
           layout.tabs.forEach((tab) => {
             if (!tab.source) return;
-            
-            // For direct file/folder rename: exact match
             if (tab.source === oldPath) {
               tab.source = newPath;
               tab.title = newName;
+            } else if (isDirectory && tab.source.startsWith(oldPath + path.sep)) {
+              const relativePath = tab.source.slice(oldPath.length);
+              tab.source = newPath + relativePath;
+            }
+            // For folder rename: update all files under the folder
+            else if (isDirectory && tab.source.startsWith(oldPath + path.sep)) {
+              const relativePath = tab.source.slice(oldPath.length);
+              tab.source = newPath + relativePath;
             }
             // For folder rename: update all files under the folder
             else if (isDirectory && tab.source.startsWith(oldPath + path.sep)) {
@@ -931,12 +867,10 @@ export const ipcStateHandlers = () => {
             }
           });
         } else if (layout.type === "group") {
-          // For group layouts, recurse on children.
           layout.children.forEach((child) => updateTabsInLayout(child));
         }
       };
 
-      // Update tabs in the active project layout (if any)
       if (appState.activeDirectory) {
         const dirState = appState.directories[appState.activeDirectory];
         if (dirState && dirState.layout) {
@@ -944,15 +878,11 @@ export const ipcStateHandlers = () => {
         }
       }
 
-      // Also update tabs in the unsaved layout if you have one.
       if (appState.unsaved && appState.unsaved.layout) {
         updateTabsInLayout(appState.unsaved.layout);
       }
 
-      // Save the updated app state.
       await saveState(appState);
-
-      // Return the successful result along with the new file data.
       return { success: true, data: result.data };
     },
   );
@@ -977,7 +907,6 @@ export const ipcStateHandlers = () => {
           customTabKey: tab.id,
         },
       };
-      // check first if sidebar doesn't already contain tab of this id
       if (
         appState.sidebars[sidebarId].tabs.some(
           (t) => t.meta?.customTabKey === tab.id,
@@ -985,7 +914,6 @@ export const ipcStateHandlers = () => {
       ) {
         return { sidebarId, tabId: newTab.id, alreadyExists: true };
       }
-      // if there is not active tab for this sidebar, set the new tab as active
       if (!appState.sidebars[sidebarId].activeTabId) {
         appState.sidebars[sidebarId].activeTabId = newTab.id;
       }
@@ -1011,21 +939,17 @@ export const ipcStateHandlers = () => {
     }
 
     if (enabled) {
-      // Add globalHistory to left if missing
       const hasGlobal = appState.sidebars.left.tabs.some((t: any) => t.type === "globalHistory");
       if (!hasGlobal) {
         appState.sidebars.left.tabs.push({ id: crypto.randomUUID(), type: "globalHistory" });
       }
-      // Add history to right if missing
       const hasHistory = appState.sidebars.right.tabs.some((t: any) => t.type === "history");
       if (!hasHistory) {
         appState.sidebars.right.tabs.push({ id: crypto.randomUUID(), type: "history" });
       }
     } else {
-      // Remove both tabs
       appState.sidebars.left.tabs = appState.sidebars.left.tabs.filter((t: any) => t.type !== "globalHistory");
       appState.sidebars.right.tabs = appState.sidebars.right.tabs.filter((t: any) => t.type !== "history");
-      // If active tab was removed, reset activeTabId
       if (!appState.sidebars.left.tabs.some((t: any) => t.id === appState.sidebars.left.activeTabId)) {
         appState.sidebars.left.activeTabId = appState.sidebars.left.tabs[0]?.id ?? null;
       }
@@ -1038,7 +962,6 @@ export const ipcStateHandlers = () => {
     return { success: true };
   });
 
-  // Add a new IPC handler to activate a tab.
   ipcMain.handle(
     "tab:activate",
     async (event, panelId: string, tabId: string) => {
@@ -1175,20 +1098,15 @@ export const ipcStateHandlers = () => {
   ipcMain.handle("extensions:uninstall", async (_, extensionId: string) => {
     const appState = getAppState();
 
-    // Remove extension tabs from the unsaved layout.
     removeExtensionTabsFromLayout(appState.unsaved.layout, extensionId);
 
-    // Remove extension tabs from all saved directory layouts.
     for (const dir of Object.values(appState.directories)) {
       if (dir.layout) {
         removeExtensionTabsFromLayout(dir.layout, extensionId);
       }
     }
 
-    // Also remove extension tabs from the sidebars.
     removeExtensionTabsFromSidebars(appState.sidebars, extensionId);
-
-    // Now uninstall the extension via the extension manager.
     await extensionManager.uninstallCommunityExtension(extensionId);
     await saveState(appState);
     maybeRecomposeSkills(appState);
@@ -1202,26 +1120,19 @@ export const ipcStateHandlers = () => {
       const ext = appState.extensions.find((e) => e.id === extensionId);
       if (ext) {
         ext.enabled = enabled;
-      } else {
-        // console.error(`extension ${extensionId} not found in state`);
       }
 
-      // If disabling the extension, remove any related tabs.
       if (!enabled) {
-        // Remove extension tabs from the unsaved layout.
         removeExtensionTabsFromLayout(appState.unsaved.layout, extensionId);
 
-        // Remove extension tabs from all saved directory layouts.
         for (const dir of Object.values(appState.directories)) {
           if (dir.layout) {
             removeExtensionTabsFromLayout(dir.layout, extensionId);
           }
         }
 
-        // Also remove any extension tabs from the sidebars.
         removeExtensionTabsFromSidebars(appState.sidebars, extensionId);
       } else {
-        // When enabling the extension, add back its sidebar tab if not already present.
         const leftSidebar = appState.sidebars.left;
         const exists = leftSidebar.tabs.some(
           (tab) => tab.meta?.extensionId === extensionId,
@@ -1280,7 +1191,6 @@ export const ipcStateHandlers = () => {
   ipcMain.handle(
     "state:addPanelTab",
     async (event, panelId: string, tab: Tab) => {
-      // Get the current state.
       return await addPanelTab(event, panelId, tab);
     },
   );
@@ -1332,19 +1242,17 @@ export const ipcStateHandlers = () => {
         : appState.unsaved.layout;
       if (!layout) throw new Error("No layout found to open tab.");
 
-      // Create a new extensionDetails tab object.
       const tab: Tab = {
         id: `extensionDetails-${extension.id}`,
         type: "extensionDetails",
         title: extension.name,
-        source: extension.id, // use extension id as a unique key
+        source: extension.id,
         directory: null,
         meta: { extensionId: extension.id },
       };
 
       const existingTab = findTabInPanel(layout, "main", tab);
       if (existingTab) {
-        // Activate the already open tab.
         activateTabInLayout(layout, "main", existingTab.id);
         await saveState(appState);
         return { tabId: existingTab.id, alreadyExists: true };
@@ -1372,11 +1280,9 @@ export const ipcStateHandlers = () => {
     if (!remoteExt) {
       throw new Error(`Remote extension for ${extensionId} not found`);
     }
-    // If the extension is already up-to-date, return the current extension.
     if (remoteExt.version === ext.version) {
       return { success: true, updatedExtension: ext };
     }
-    // Otherwise, download and replace (update) the extension using the extension manager.
     const updatedExtension =
       await extensionManager.installCommunityExtension(remoteExt);
     await saveState(appState);
@@ -1384,8 +1290,10 @@ export const ipcStateHandlers = () => {
     return { success: true, updatedExtension };
   });
 
-  ipcMain.handle("terminal:new", async (_, panelId: string) => {
-    const appState = getAppState();
+  ipcMain.handle("terminal:new", async (event, panelId: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender) as any;
+    const windowId = win?.windowInfo?.id as string | undefined;
+    const appState = getAppState(event);
     const layout = appState.activeDirectory
       ? appState.directories[appState.activeDirectory]?.layout
       : appState.unsaved.layout;
@@ -1394,8 +1302,6 @@ export const ipcStateHandlers = () => {
       throw new Error("No layout found to add terminal tab.");
     }
 
-    // Determine the default cwd:
-    // If there's an active project, use that path; otherwise, default to the user's home directory.
     const defaultCwd = appState.activeDirectory || os.homedir();
 
     const newTab: Tab = {
@@ -1403,15 +1309,12 @@ export const ipcStateHandlers = () => {
       type: "terminal",
       title: "Terminal",
       source: null,
-      // Set the directory property so later terminal processes know where to start
       directory: defaultCwd,
     };
 
     addTabToPanel(layout, panelId, newTab);
     activateTabInLayout(layout, panelId, newTab.id);
-    await saveState(appState);
-
-    // Return the cwd along with the new tab id so the renderer can pass it to "terminal:attachOrCreate"
+    await saveState(appState, windowId);
     return { panelId, tabId: newTab.id, cwd: defaultCwd };
   });
 
@@ -1424,7 +1327,6 @@ export const ipcStateHandlers = () => {
       unsavedContent?: string, // passed from the renderer if the document is "dirty"
     ) => {
       const appState = getAppState();
-      // Choose the layout: use the active directory's layout if available; otherwise use the unsaved layout.
       const layout =
         appState.activeDirectory &&
         appState.directories[appState.activeDirectory]
@@ -1438,45 +1340,38 @@ export const ipcStateHandlers = () => {
       if (!closingTab) {
         throw new Error(`Tab with id ${tabId} not found in panel ${panelId}.`);
       }
-      // console.debug("closingTab", closingTab);
-      // For document tabs with unsaved changes, show a native OS dialog.
+
       if (closingTab.type === "document" && unsavedContent) {
         const result = await dialog.showMessageBox({
           type: "warning",
           buttons: ["Save", "Don't Save", "Cancel"],
-          defaultId: 0, // "Save" is the primary action
-          cancelId: 2, // "Cancel" is the cancel action
+          defaultId: 0,
+          cancelId: 2,
           title: "Unsaved Changes",
           message: `Do you want to save changes made to ${closingTab.title}?`,
           detail: "Your changes will be lost if you don't save them.",
         });
 
         if (result.response === 2) {
-          // User clicked "Cancel"—abort closing.
           return { canceled: true };
         }
 
         if (result.response === 0) {
-          // User chose "Save". Use the saveDocument function.
           const success = await saveDocument(closingTab, unsavedContent);
           if (!success) {
-            // If saving fails, cancel closing.
             return { canceled: true };
           }
         }
-        // If the user chose "Don't Save" (button index 1), proceed without saving.
       }
-      // If this is a terminal tab, kill the associated process.
+
       if (closingTab.type === "terminal" && closingTab.source) {
         killTerminal(closingTab.source);
       }
 
-      // Clean up autosaved file if this was an unsaved document
       if (closingTab.type === "document" && !closingTab.source) {
         await deleteAutosaveFile(tabId);
       }
 
-      // Remove the tab from the layout.
       const removed = removeTabFromPanel(layout, panelId, tabId);
       if (!removed) {
         throw new Error(
@@ -1495,7 +1390,6 @@ export const ipcStateHandlers = () => {
       tabs: Array<{ tabId: string; unsavedContent?: string }>,
     ) => {
       const appState = getAppState();
-      // Choose the layout: use the active directory's layout if available; otherwise use the unsaved layout.
       const layout =
         appState.activeDirectory &&
         appState.directories[appState.activeDirectory]
@@ -1508,67 +1402,56 @@ export const ipcStateHandlers = () => {
       const closedTabs: Array<{ panelId: string; tabId: string }> = [];
       const canceledTabs: Array<{ panelId: string; tabId: string }> = [];
 
-      // Loop through each tab and process them one by one
       for (const tabInfo of tabs) {
         const { tabId, unsavedContent } = tabInfo;
 
         const closingTab = findTabById(layout, panelId, tabId);
         if (!closingTab) {
           console.warn(`Tab with id ${tabId} not found in panel ${panelId}.`);
-          continue; // Skip to next tab instead of throwing error
+          continue;
         }
 
         let shouldClose = true;
 
-        // For document tabs with unsaved changes, show a native OS dialog.
         if (closingTab.type === "document" && unsavedContent) {
           const result = await dialog.showMessageBox({
             type: "warning",
             buttons: ["Save", "Don't Save", "Cancel"],
-            defaultId: 0, // "Save" is the primary action
-            cancelId: 2, // "Cancel" is the cancel action
+            defaultId: 0,
+            cancelId: 2,
             title: "Unsaved Changes",
             message: `Do you want to save changes made to ${closingTab.title}?`,
             detail: "Your changes will be lost if you don't save them.",
           });
 
           if (result.response === 2) {
-            // User clicked "Cancel"—abort closing for this tab.
             canceledTabs.push({ panelId, tabId });
             shouldClose = false;
-            continue; // Move to next tab
+            continue;
           }
 
           if (result.response === 0) {
-            // User chose "Save". Use the saveDocument function.
             const success = await saveDocument(closingTab, unsavedContent);
             if (!success) {
-              // If saving fails, cancel closing for this tab.
               canceledTabs.push({ panelId, tabId });
               shouldClose = false;
-              continue; // Move to next tab
+              continue;
             }
           }
-          // If the user chose "Don't Save" (button index 1), proceed without saving.
         }
 
         if (shouldClose) {
-          // If this is a terminal tab, kill the associated process.
           if (closingTab.type === "terminal" && closingTab.source) {
             killTerminal(closingTab.source);
           }
 
-          // Clean up autosaved file if this was an unsaved document
           if (closingTab.type === "document" && !closingTab.source) {
             await deleteAutosaveFile(tabId);
           }
 
-          // Remove the tab from the layout.
           const removed = removeTabFromPanel(layout, panelId, tabId);
           if (!removed) {
-            console.warn(
-              `Failed to remove tab with id ${tabId} from panel ${panelId}.`,
-            );
+            console.warn(`Failed to remove tab with id ${tabId} from panel ${panelId}.`);
             canceledTabs.push({ panelId, tabId });
           } else {
             closedTabs.push({ panelId, tabId });
@@ -1584,7 +1467,7 @@ export const ipcStateHandlers = () => {
         panelId,
         closedTabs,
         canceledTabs,
-        allClosed: canceledTabs.length === 0, // true if all tabs were successfully closed
+        allClosed: canceledTabs.length === 0,
       };
     },
   );
@@ -1668,15 +1551,11 @@ export const ipcStateHandlers = () => {
     },
   );
 
-  // This IPC handler opens a file from a file link.
-  // It checks if there's already a document tab open for the file;
-  // if so, it activates that tab; otherwise, it creates a new document tab.
   ipcMain.handle(
     "fileLink:open",
     async (_event, filePath: string, filename: string) => {
       const appState = getAppState();
 
-      // Choose the layout from the active project or unsaved state.
       const layout: PanelElement = appState.activeDirectory
         ? appState.directories[appState.activeDirectory]?.layout
         : appState.unsaved.layout;
@@ -1685,7 +1564,6 @@ export const ipcStateHandlers = () => {
         throw new Error("No layout available to open file.");
       }
 
-      // A helper function to recursively search for a document tab that has this file path.
       const findDocumentTab = (layout: PanelElement): Tab | null => {
         if (layout.type === "panel") {
           return (
@@ -1701,23 +1579,20 @@ export const ipcStateHandlers = () => {
         }
         return null;
       };
+
       const existingTab = findDocumentTab(layout);
       if (existingTab) {
-        // If found, activate it.
-        // (Assuming your document tabs live in a panel with id "main")
         activateTabInLayout(layout, "main", existingTab.id);
         await saveState(appState);
         return { tabId: existingTab.id, opened: false };
       } else {
-        // Otherwise, create a new document tab.
         const newTab: Tab = {
           id: crypto.randomUUID(),
           type: "document",
-          title: filename || "Untitled", // Use the filename as the tab title
-          source: filePath, // Store the file path so you can load the content later
+          title: filename || "Untitled",
+          source: filePath,
           directory: null,
         };
-        // Add the new tab to the "main" panel.
         if (!addTabToPanel(layout, "main", newTab)) {
           throw new Error("Failed to add new tab to panel 'main'");
         }
@@ -1749,7 +1624,6 @@ export const ipcStateHandlers = () => {
         path: newPath,
         name: result.data.name,
       });
-      // eventBus.emitEvent("file:duplicate", { path: newPath, name: result.data.name });
       return { success: true, data: result.data };
     },
   );

@@ -121,7 +121,6 @@ app.on("ready", async () => {
   const splashPath = isDev
     ? path.resolve(__dirname, "../../splash.html")
     : path.join(process.resourcesPath, "splash.html");
-  // console.debug("splash path " + splashPath);
   splashWindow.loadFile(splashPath);
   setSplash(splashWindow);
 

@@ -20,7 +20,6 @@ export const CopyExtension = Extension.create({
               try {
                 nodeData = JSON.parse(jsonStr);
               } catch (error) {
-                // console.error("Invalid JSON pasted:", error);
                 return false;
               }
 
@@ -29,7 +28,6 @@ export const CopyExtension = Extension.create({
               try {
                 node = view.state.schema.nodeFromJSON(nodeData);
               } catch (error) {
-                // console.error("Error creating node from JSON:", error);
                 return false;
               }
 

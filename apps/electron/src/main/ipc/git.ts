@@ -121,12 +121,10 @@ export function registerGitIpcHandlers() {
     }
   });
 
-  // Clone a repository into the active project directory (or create a new one)
   ipcMain.handle("git:clone", async (event: IpcMainInvokeEvent, repoUrl: string, token?: string) => {
     const activeProject = await getActiveProject(event);
 
     try {
-      // Inject token into URL for authenticated clones
       let cloneUrl = repoUrl;
       if (token) {
         const parsed = new URL(repoUrl);
@@ -135,14 +133,11 @@ export function registerGitIpcHandlers() {
         cloneUrl = parsed.toString();
       }
 
-      // Derive the repo folder name from the URL (e.g. "my-repo" from ".../my-repo.git")
       const baseName = repoUrl.replace(/\.git$/, "").split("/").pop() || "repo";
 
-      // Helper: async directory-exists check
       const dirExists = (p: string) =>
         fs.promises.access(p).then(() => true).catch(() => false);
 
-      // Helper to send progress to the renderer safely
       const sendProgress = (stage: string, progress: number) => {
         try {
           if (!event.sender.isDestroyed()) {
@@ -151,7 +146,6 @@ export function registerGitIpcHandlers() {
         } catch { /* renderer disposed */ }
       };
 
-      // Create a git instance that forwards clone progress to the renderer
       const makeProgressGit = (baseDir: string) =>
         simpleGit({
           baseDir,
@@ -161,7 +155,6 @@ export function registerGitIpcHandlers() {
         });
 
       if (!activeProject) {
-        // No active project — clone into ~/Voiden/<name>, then scaffold .voiden
         const voidenHome = path.join(os.homedir(), "Voiden");
         await fs.promises.mkdir(voidenHome, { recursive: true });
 
@@ -175,9 +168,6 @@ export function registerGitIpcHandlers() {
 
         const newProjectPath = path.join(voidenHome, newFolderName);
 
-        // Clone directly (git clone creates the directory).
-        // Suppress watcher events for the clone destination so the IPC channel
-        // isn't flooded with file:new events for every file being cloned.
         const gitParent = makeProgressGit(voidenHome);
         setCloning(newProjectPath, true);
         let newLfsWarning = false;
@@ -194,7 +184,6 @@ export function registerGitIpcHandlers() {
           setCloning(newProjectPath, false);
         }
 
-        // Add .voiden scaffold after successful clone
         const voidenDir = path.join(newProjectPath, ".voiden");
         await fs.promises.mkdir(voidenDir, { recursive: true });
         await fs.promises.writeFile(
@@ -205,7 +194,6 @@ export function registerGitIpcHandlers() {
         return { clonedPath: newProjectPath, clonedInPlace: false, isNewProject: true, lfsWarning: newLfsWarning };
       }
 
-      // Find a unique folder name inside the active project (repo, repo-1, repo-2, ...)
       let folderName = baseName;
       let counter = 1;
       while (await dirExists(path.join(activeProject, folderName))) {
@@ -264,7 +252,6 @@ export function registerGitIpcHandlers() {
     try {
       const git = getSharedGit(activeProject);
       await git.init();
-      // Invalidate so subsequent isRepo checks reflect the newly created repo
       invalidateRepoCache(activeProject);
       return true;
     } catch (error) {
@@ -273,21 +260,16 @@ export function registerGitIpcHandlers() {
     }
   });
 
-  // Get working directory status (all changed files)
   ipcMain.handle("git:getStatus", async (event: IpcMainInvokeEvent) => {
     const activeProject = await getActiveProject(event);
     if (!activeProject) return null;
     try { await fs.promises.access(activeProject); } catch { return null; }
-    // Deduplicate: if a status call is already in-flight for this project,
-    // return the same promise rather than spawning more git processes.
     return dedupeCall(pendingStatus, activeProject, async () => {
     try {
-      // isRepo check is cached — no subprocess for projects we've seen before
       if (!await getCachedIsRepo(activeProject)) return null;
 
       const git = getSharedGit(activeProject);
 
-      // subprocess 1: git status — gives files, branch name, tracking, ahead/behind
       const _t0 = Date.now();
       const status = await git.status();
       const _statusMs = Date.now() - _t0;
@@ -308,11 +290,8 @@ export function registerGitIpcHandlers() {
       const isRemoteTrackingBranch =
         currentBranch?.startsWith('remotes/') || currentBranch?.startsWith('origin/');
 
-      // When status.tracking is absent, look up the upstream in one for-each-ref call
-      // instead of the previous 4–6 separate rev-parse / config / show-ref subprocesses.
       if (!rawTracking && currentBranch && !isRemoteTrackingBranch) {
         try {
-          // subprocess 2 (conditional): upstream short name + full ref from refs/heads/<branch>
           const upRaw = await git.raw([
             'for-each-ref', `refs/heads/${currentBranch}`,
             '--format=%(upstream:short)\t%(upstream)',
@@ -324,8 +303,6 @@ export function registerGitIpcHandlers() {
             tracking = upShort;
             resolvedRemoteRef = upFull || `refs/remotes/${upShort}`;
           } else {
-            // No upstream configured — search for a matching remote tracking branch
-            // subprocess 3 (conditional): refs/remotes/*/<branch>
             const refRaw = await git.raw([
               'for-each-ref', `refs/remotes/*/${currentBranch}`, '--format=%(refname)',
             ]);
@@ -340,7 +317,6 @@ export function registerGitIpcHandlers() {
 
       const isPublished = isRemoteTrackingBranch || !!tracking;
 
-      // subprocess 4 (conditional): accurate ahead/behind via rev-list
       if (resolvedRemoteRef && !isRemoteTrackingBranch) {
         try {
           const countsRaw = await git.raw([
@@ -352,7 +328,6 @@ export function registerGitIpcHandlers() {
         } catch { /* fall back to status values */ }
       }
 
-      // subprocess 5 (conditional): outgoing commits for unpublished branches
       let outgoing = ahead > 0;
       if (!resolvedRemoteRef) {
         try {

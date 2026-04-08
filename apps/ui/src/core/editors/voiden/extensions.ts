@@ -232,7 +232,6 @@ export const voidenExtensions: AnyExtension[] = [
               const nodeEnd = $from.end();
               state.tr.replaceRangeWith(nodeStart, nodeEnd, state.schema.text(text));
               // Return nothing (i.e. undefined) to comply with the expected type
-              // console.debug("paste test", state.schema.text(text));
               return;
             }
             // Otherwise, let the paste proceed normally

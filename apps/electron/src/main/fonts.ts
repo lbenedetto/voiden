@@ -104,7 +104,6 @@ export async function installNerdFont(): Promise<{ success: boolean; error?: str
 
     return { success: true, alreadyInstalled: false };
   } catch (error) {
-    // console.error("Error installing Nerd Font:", error);
     return {
       success: false,
       error: error instanceof Error ? error.message : "Unknown error"
@@ -130,7 +129,6 @@ export async function uninstallNerdFont(): Promise<{ success: boolean }> {
 
     return { success: true };
   } catch (error) {
-    // console.error("Error uninstalling Nerd Font:", error);
     return { success: false };
   }
 }
@@ -151,7 +149,6 @@ export async function getFontAsBase64(fontFileName: string): Promise<string | nu
     const base64 = fontBuffer.toString('base64');
     return `data:font/truetype;charset=utf-8;base64,${base64}`;
   } catch (error) {
-    // console.error(`Error reading font ${fontFileName}:`, error);
     return null;
   }
 }

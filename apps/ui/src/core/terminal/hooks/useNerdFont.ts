@@ -76,7 +76,6 @@ export function useNerdFont() {
         setFontLoaded(true);
         setFontPath("loaded"); // Just indicate it's loaded
       } catch (error) {
-        // console.error("Error loading Nerd Font:", error);
         setFontLoaded(false);
         setFontPath(null);
       }

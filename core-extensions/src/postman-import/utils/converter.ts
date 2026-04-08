@@ -248,7 +248,6 @@ export const processItems = async (
 
       await new Promise((resolve) => setTimeout(resolve, 20));
     } catch (error) {
-      // console.error(`Error processing ${item.name}:`, error);
       throw error;
     }
   }
@@ -303,7 +302,6 @@ export const importPostmanCollection = async (
       message: "Collection imported successfully",
     };
   } catch (error) {
-    // console.error("Import failed:", error);
     throw error;
   }
 };

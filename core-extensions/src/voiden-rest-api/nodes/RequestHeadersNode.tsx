@@ -218,7 +218,6 @@ export const createRequestHeadersNode = (NodeViewWrapper: any, CodeEditor: any, 
           const summaryText = summaryLines.join('\n');
           await navigator.clipboard.writeText(summaryText);
         } catch (error) {
-          // console.error("Copy error:", error);
         }
       };
 
@@ -256,7 +255,6 @@ export const createRequestHeadersNode = (NodeViewWrapper: any, CodeEditor: any, 
       try {
         await navigator.clipboard.writeText(headersText);
       } catch (error) {
-        // console.error("Copy error:", error);
       }
     };
 
@@ -282,7 +280,6 @@ export const createRequestHeadersNode = (NodeViewWrapper: any, CodeEditor: any, 
         const summaryText = summaryLines.join('\n');
         await navigator.clipboard.writeText(summaryText);
       } catch (error) {
-        // console.error("Copy error:", error);
       }
     };
 

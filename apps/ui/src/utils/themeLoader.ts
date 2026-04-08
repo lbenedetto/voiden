@@ -85,7 +85,6 @@ export async function getAvailableThemes(): Promise<ThemeMetadata[]> {
     try {
       return await window.electron.themes.list();
     } catch (error) {
-      // console.error('Failed to load theme list:', error);
       return [];
     }
   }
@@ -100,7 +99,6 @@ export async function loadThemeById(themeId: string = 'voiden') {
       if (theme) {
         loadTheme(theme);
       } else {
-        // console.warn(`Theme '${themeId}' not found, falling back to voiden`);
         // Try to load voiden as fallback
         const fallback = await window.electron.themes.load('voiden');
         if (fallback) {
@@ -108,7 +106,6 @@ export async function loadThemeById(themeId: string = 'voiden') {
         }
       }
     } catch (error) {
-      // console.error('Failed to load theme:', error);
     }
   }
 }
@@ -120,7 +117,6 @@ export async function getThemeFromSettings(): Promise<string> {
       const settings = await window.electron.userSettings.get();
       return settings?.appearance?.theme || 'voiden';
     } catch (error) {
-      // console.error('Failed to load theme from settings:', error);
       return 'voiden';
     }
   }

@@ -82,7 +82,6 @@ export class PipelineExecutor {
         responseState,
       };
     } catch (error) {
-      // console.error('[PipelineExecutor] Error during execution:', error);
       return {
         success: false,
         requestState,
@@ -303,7 +302,6 @@ export class PipelineExecutor {
         body = Buffer.from(buffer);
       }
     } catch (error) {
-      // console.error('Error parsing response body:', error);
       body = await response.text();
     }
 

@@ -137,6 +137,10 @@ const lintTooltipTheme = EditorView.theme({
   },
 });
 
+// Content size thresholds for performance tiering
+const LARGE_CONTENT_SIZE = 150 * 1024;      // 150 KB — disable linter, env vars, selection matches
+const VERY_LARGE_CONTENT_SIZE = 500 * 1024; // 500 KB — also disable syntax highlighting
+
 interface CodeEditorProps {
   value?: string;
   tiptapProps?: CodeNodeViewRendererProps;
@@ -148,6 +152,8 @@ interface CodeEditorProps {
   showReplace?: boolean;
   /** Optional lint function — called with editor content, returns diagnostics shown inline. */
   validateFn?: (content: string) => ScriptDiagnostic[];
+  /** Force syntax highlighting even when content exceeds the very-large threshold. */
+  forceHighlight?: boolean;
 }
 
 export const CodeEditor = ({
@@ -159,6 +165,7 @@ export const CodeEditor = ({
   autofocus = false,
   showReplace = true,
   validateFn,
+  forceHighlight = false,
 }: CodeEditorProps) => {
   const isRenaming = useFocusStore((state) => state.isRenaming);
 
@@ -198,6 +205,11 @@ export const CodeEditor = ({
 
   const initialValue = tiptapProps?.node.attrs.body ?? value ?? '';
   const displayValue = initialValue || getDefaultText(lang);
+
+  // Size-based performance tiers — larger content disables progressively more extensions
+  const contentSize = displayValue.length;
+  const isLargeContent = contentSize > LARGE_CONTENT_SIZE;
+  const isVeryLargeContent = contentSize > VERY_LARGE_CONTENT_SIZE;
 
   // Store the initial value to compare against in onChange
   if (isInitialMount.current) {
@@ -248,9 +260,6 @@ export const CodeEditor = ({
     // This fixes issues on Linux where shortcuts like Ctrl+/ would select text outside the editor
     const handleKeyboardShortcuts = (e: KeyboardEvent) => {
       const isModKey = e.metaKey || e.ctrlKey;
-
-      // DEBUG: Uncomment to see what keys are being captured
-      // console.log('Key event:', e.key, 'isModKey:', isModKey, 'target:', e.target);
 
       // Only intercept if modifier key is pressed
       // This allows normal typing without interference
@@ -330,20 +339,26 @@ export const CodeEditor = ({
     // When embedded in TipTap, skip CM's search extension entirely —
     // the unified search panel handles find/replace
     ...(tiptapProps ? [] : [search({ top: true, createPanel: (view) => createCustomSearchPanel(view) })]),
-    highlightSelectionMatches(),
+    // Disable selection matching for large content — it scans the full doc on every selection
+    ...(isLargeContent ? [] : [highlightSelectionMatches()]),
     EditorView.theme({
       "&": {
         "--editor-selection": "rgba(255, 99, 132, 0.6)",
       },
     }),
-    renderLang(lang),
-    createHighlightPlugin(activeEnvData, processData),
+    // Very large content: skip syntax highlight entirely (lezer parses the full doc)
+    // Large content: keep highlight but skip the linter (expensive on huge files)
+    ...((isVeryLargeContent && !forceHighlight) ? [] : renderLang(lang, isLargeContent)),
+    // Disable env-variable decorations for large content — needlessly scans full doc
+    ...(isLargeContent ? [] : [createHighlightPlugin(activeEnvData, processData)]),
     // Indentation support
     indentOnInput(),
     indentUnit.of("  "),
+    // Line wrapping: off for very large content (wrapping many chars → DOM bloat)
+    ...(isVeryLargeContent ? [] : [EditorView.lineWrapping]),
     ...codemirrorExtensionsFromStore, // Add dynamic extensions from plugins
-    // Custom inline linter from validateFn prop
-    ...(validateFn ? [
+    // Custom inline linter from validateFn prop (skip for large content)
+    ...(!isLargeContent && validateFn ? [
       lintTooltipTheme,
       lintGutter(),
       linter((view) => {
@@ -388,7 +403,6 @@ export const CodeEditor = ({
         : searchKeymap),
       { key: "Escape", run: closeSearchPanel }
     ]),
-    EditorView.lineWrapping,
   ];
 
   // Only add codemirrorKeymap for editable editors

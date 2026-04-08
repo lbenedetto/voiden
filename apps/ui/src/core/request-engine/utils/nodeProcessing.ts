@@ -72,7 +72,6 @@ async function resolveLinkedBlock(
     queryClient.setQueryData(queryKey, referencedBlock);
     return referencedBlock;
   } catch (error) {
-    // console.error("[resolveLinkedBlock] Error:", error);
     throw error;
   }
 }
@@ -129,11 +128,9 @@ export async function attachFileDataToNodes(
           },
         };
       } else {
-        // console.warn("[attachFileDataToNodes] No valid file data for:", absolutePath);
         return node;
       }
     } catch (error) {
-      // console.error("[attachFileDataToNodes] Error fetching file data for", node.attrs.filePath, error);
       return node;
     }
   }
@@ -153,7 +150,6 @@ export async function attachFileDataToNodes(
       }
       return node;
     } catch (error) {
-      // console.error("[attachFileDataToNodes] Error resolving linkedBlock for", node.attrs.blockUid, error);
       return node;
     }
   }

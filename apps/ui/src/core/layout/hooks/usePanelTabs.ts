@@ -31,8 +31,27 @@ export const useGetTabContent = (panelId: string) => {
     // components from unmounting and replaying their buffer on remount.
     // When tab is undefined (last tab closed), no placeholder — allow unmount.
     placeholderData: tab ? (prev: any) => prev : undefined,
+    retry: false,
     queryFn: async () => {
-      const content = await window.electron?.tab.getContent(tab);
+      const TAB_LOAD_TIMEOUT_MS = 30_000;
+
+      let timeoutId: ReturnType<typeof setTimeout>;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error("TAB_LOAD_TIMEOUT")),
+          TAB_LOAD_TIMEOUT_MS,
+        );
+      });
+
+      let content: any;
+      try {
+        content = await Promise.race([
+          window.electron?.tab.getContent(tab),
+          timeoutPromise,
+        ]);
+      } finally {
+        clearTimeout(timeoutId!);
+      }
 
       // If content hasn't changed, return the cached reference to prevent re-renders
       const cached = queryClient.getQueryData(queryKey);

@@ -85,7 +85,6 @@ export const createJsonNode = (NodeViewWrapper: any, CodeEditor: any, RequestBlo
         const prettified = prettifyJSON(currentValue);
         props.updateAttributes({ body: prettified });
       } catch (error) {
-        // console.error('[JsonNode] Prettify error:', error);
       }
     };
 

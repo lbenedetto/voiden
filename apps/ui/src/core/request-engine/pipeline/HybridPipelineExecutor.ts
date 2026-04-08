@@ -94,7 +94,6 @@ export class HybridPipelineExecutor {
         responseState,
       };
     } catch (error) {
-      // console.error('[HybridPipeline] Error during execution:', error);
       return {
         success: false,
         requestState,
