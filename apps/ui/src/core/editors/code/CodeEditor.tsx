@@ -362,6 +362,13 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
     return ext ?? null;
   }, [source]);
 
+  // Determine the language extension based on file extension — declared early so the
+  // streaming effect below can reference it without a temporal dead zone error.
+  const langExt = useMemo(() => {
+    const ext = getLanguageExtension(source);
+    return ext ?? null;
+  }, [source]);
+
   // Detect if this is a large file
   const isLargeFile = useMemo(() => {
     if (streamable) return true; // streamed files are always "large" — no highlighting

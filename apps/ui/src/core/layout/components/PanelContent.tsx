@@ -387,6 +387,19 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
     });
   }, [tabContentError, tabs?.activeTabId, panelId, closePanelTab]);
 
+  // If tab content load times out (30s), close the tab and show a toast
+  useEffect(() => {
+    if (!tabContentError) return;
+    const err = tabContentError as Error;
+    if (err.message !== "TAB_LOAD_TIMEOUT") return;
+    const activeTabId = tabs?.activeTabId;
+    if (!activeTabId) return;
+    closePanelTab({ panelId, tabId: activeTabId });
+    toast.warning("File too large to render", {
+      description: "Removed the tab for better performance.",
+    });
+  }, [tabContentError, tabs?.activeTabId, panelId, closePanelTab]);
+
   // Subscribe to unsaved Voiden editor content for the active tab so predicates
   // are re-evaluated whenever the editor content changes (not just on file save).
   const activeTabId = tabContent?.tabId;
