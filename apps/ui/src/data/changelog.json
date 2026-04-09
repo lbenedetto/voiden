@@ -15,7 +15,7 @@
     "Improved": [
       "File tree reflects instantly — files created by AI agents, code generators, or any external process now appear in the file explorer immediately instead of after a multi-second delay; fixed by busting the server-side tree cache on every file system event and reducing chokidar write-finish thresholds from 300 ms to 50 ms",
       "Generate Voiden Files button now appears on large OpenAPI and Postman files — the button predicate correctly evaluates after streaming completes by storing a per-tab content snapshot, and survives tab switches without re-evaluating from scratch",
-      "Generate Voiden Files progress survives tab switches — import state is persisted per tab so switching away and back no longer resets the progress display or the in-flight generation",
+      "Generate Voiden Files progress survives tab switches — import state is persisted per tab so switching away and back no longer resets the progress display or the in-flight generation"
     ],
     "Fixed": [
       "Postman and OpenAPI import buttons were not shown on large files loaded via streaming because tab.content was always empty until fully loaded",

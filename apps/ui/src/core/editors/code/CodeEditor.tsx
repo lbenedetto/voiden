@@ -1,4 +1,3 @@
-// CodeEditor.tsx
 import { search, highlightSelectionMatches, searchKeymap, closeSearchPanel } from '@codemirror/search';
 import { useCallback, useMemo, useState, useEffect, useLayoutEffect, memo, useRef } from "react";
 import { Compartment } from "@codemirror/state";
@@ -7,10 +6,9 @@ import { EditorView, keymap } from "@codemirror/view";
 import { useEditorStore } from "../voiden/VoidenEditor";
 import { tags as t } from "@lezer/highlight";
 import { createTheme, type CreateThemeOptions } from "@uiw/codemirror-themes";
-import { linter } from "@codemirror/lint"; // New import for linter
+import { linter } from "@codemirror/lint";
 import { createCustomSearchPanel, customSearchPanelStyles } from "./lib/extensions/customSearchPanel";
 
-// Import language support packages from CodeMirror v6
 import {
   javascript
 } from "@codemirror/lang-javascript";
@@ -32,17 +30,15 @@ import { lintYaml } from "@/core/editors/code/lib/extensions/lintYaml";
 interface CodeEditorProps {
   tabId: string;
   content: string;
-  source: string; // The file path used for saving and determining the language.
+  source: string;
   panelId: string;
   isActive?: boolean;
-  streamable?: boolean; // File is too large for a single IPC read — stream it in chunks
-  fullSize?: number;    // Total file size in bytes (used for progress display)
+  streamable?: boolean;
+  fullSize?: number;
 }
 
-// File size threshold for performance optimizations (5MB)
 const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024;
 
-// Debounce helper for large file updates
 function debounce<T extends (...args: any[]) => any>(
   func: T,
   wait: number
@@ -55,14 +51,12 @@ function debounce<T extends (...args: any[]) => any>(
 }
 
 export const config = {
-  // UI colors - theme-aware
   background: "var(--editor-bg)",
   foreground: "var(--editor-fg)",
   caret: "var(--editor-fg)",
   selection: "var(--selection)",
   lineHighlight: "transparent",
 
-  // Syntax highlighting colors - all theme-aware via CSS variables
   keyword: "var(--syntax-keyword)",
   variable: "var(--syntax-entity)",
   function: "var(--syntax-func)",
@@ -83,9 +77,9 @@ const defaultSettingsQuietlight: CreateThemeOptions["settings"] = {
   foreground: config.foreground,
   caret: config.caret,
   selection: config.selection,
-  selectionMatch: "var(--editor-selection)", // gray-600 - for matching selections
+  selectionMatch: "var(--editor-selection)",
   gutterBackground: config.background,
-  gutterForeground: "var(--editor-gutter-normal)", // stone-500 to match comment color
+  gutterForeground: "var(--editor-gutter-normal)",
   gutterBorder: "transparent",
   lineHighlight: config.lineHighlight,
   fontSize: "var(--font-size-base)",
@@ -93,7 +87,7 @@ const defaultSettingsQuietlight: CreateThemeOptions["settings"] = {
 };
 
 export const quietlightStyle: CreateThemeOptions["styles"] = [
-  { tag: t.emphasis, backgroundColor: "#44403c" }, // Highlight for word selection.
+  { tag: t.emphasis, backgroundColor: "#44403c" },
   { tag: t.keyword, color: config.keyword },
   { tag: [t.name, t.deleted, t.character, t.macroName], color: config.variable },
   { tag: [t.propertyName], color: config.function },
@@ -138,7 +132,6 @@ const quietlightInit = (options?: Partial<CreateThemeOptions>) => {
   });
 };
 
-// Minimal search panel theme to match Voiden aesthetic
 const searchPanelTheme = EditorView.theme({
   ".cm-panels": {
     position: "fixed !important",
@@ -291,7 +284,6 @@ export const voidenTheme = [quietlightInit(), searchPanelTheme];
 
 const myLinter = linter((view) => lintYaml(view));
 
-// Helper function to determine the language extension based on the file's extension.
 const getLanguageExtension = (filename: string) => {
   const ext = filename?.split(".").pop()?.toLowerCase() || "";
   switch (ext) {
@@ -340,12 +332,10 @@ const getLanguageExtension = (filename: string) => {
 export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = true, streamable, fullSize }: CodeEditorProps) => {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [streamProgress, setStreamProgress] = useState<number | null>(streamable ? 0 : null);
-  const [canHighlight, setCanHighlight] = useState(false); // show highlight button after stream completes
+  const [canHighlight, setCanHighlight] = useState(false);
   const [highlighted, setHighlighted] = useState(false);
-  // Stable compartment for dynamic language reconfiguration
   const langCompartment = useRef(new Compartment()).current;
 
-  // const isRenaming = useFocusStore((state) => state.isRenaming);
   const { setUnsaved, clearUnsaved, setScrollPosition, getScrollPosition } = useEditorStore((state) => ({
     setUnsaved: state.setUnsaved,
     clearUnsaved: state.clearUnsaved,
@@ -355,38 +345,23 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
 
   const { setActiveEditor, updateContent, setEditor, setStreamSnapshot } = useCodeEditorStore();
 
-  // Determine the language extension based on file extension — declared early so the
-  // streaming effect below can reference it without a temporal dead zone error.
   const langExt = useMemo(() => {
     const ext = getLanguageExtension(source);
     return ext ?? null;
   }, [source]);
 
-  // Determine the language extension based on file extension — declared early so the
-  // streaming effect below can reference it without a temporal dead zone error.
-  const langExt = useMemo(() => {
-    const ext = getLanguageExtension(source);
-    return ext ?? null;
-  }, [source]);
 
-  // Detect if this is a large file
   const isLargeFile = useMemo(() => {
-    if (streamable) return true; // streamed files are always "large" — no highlighting
+    if (streamable) return true;
     const sizeInBytes = new Blob([content]).size;
     return sizeInBytes > LARGE_FILE_THRESHOLD;
   }, [content, streamable]);
 
-  // Stream large file content in 512 KB chunks so the main-process IPC never
-  // serialises a huge string at once and the renderer stays responsive.
   useEffect(() => {
     if (!streamable || !source || !editorView) return;
-
-    // Register this tab as the active editor immediately so that PanelContent's
-    // predicate checks (e.g. Postman import button) can match by tabId once
-    // content arrives — setActiveEditor is otherwise only called on user focus.
     setActiveEditor(tabId, "", source, panelId);
 
-    const CHUNK = 512 * 1024; // 512 KB per IPC call
+    const CHUNK = 512 * 1024;
     let cancelled = false;
 
     (async () => {
@@ -399,9 +374,6 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
         const { content: chunk, bytesRead, done, totalSize } = result;
 
         if (chunk) {
-          // Preserve scroll position — appending content changes the document
-          // height which causes CodeMirror to recalculate the viewport and
-          // produces a visible glitch while the user is scrolling.
           const scrollTop = editorView.scrollDOM.scrollTop;
           editorView.dispatch({
             changes: { from: editorView.state.doc.length, insert: chunk },
@@ -411,23 +383,18 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
 
         offset += bytesRead;
 
-        // Update progress bar (0–100)
         if (fullSize || totalSize) {
           setStreamProgress(Math.min(100, Math.round((offset / (fullSize ?? totalSize)) * 100)));
         }
 
         if (done) break;
 
-        // Yield to the event loop between chunks — keeps the UI responsive
         await new Promise<void>((r) => setTimeout(r, 0));
       }
 
       if (!cancelled) {
-        setStreamProgress(null); // hide progress bar
-        if (langExt) setCanHighlight(true); // offer highlight button if language is known
-        // Streaming complete — snapshot first 512 KB into the per-tab store so
-        // editor-action predicates (OpenAPI / Postman buttons) appear and survive
-        // tab switches. Keys like "openapi:" are always near the top of the file.
+        setStreamProgress(null);
+        if (langExt) setCanHighlight(true);
         const snapshot = editorView.state.doc.sliceString(0, CHUNK);
         updateContent(snapshot);
         setStreamSnapshot(tabId, snapshot);
@@ -437,7 +404,6 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
     return () => { cancelled = true; };
   }, [streamable, source, editorView, fullSize, langExt, updateContent, setActiveEditor, setStreamSnapshot, tabId, panelId]);
 
-  // Create debounced update function for large files
   const debouncedUpdate = useMemo(
     () => debounce((value: string, tId: string) => {
       if (value === content) {
@@ -446,11 +412,10 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
         setUnsaved(tId, value);
       }
       updateContent(value);
-    }, isLargeFile ? 300 : 0), // 300ms debounce for large files
+    }, isLargeFile ? 300 : 0),
     [isLargeFile, setUnsaved, clearUnsaved, updateContent, content]
   );
 
-  // Inject custom search panel styles once
   useEffect(() => {
     const styleId = 'custom-search-panel-styles';
     if (!document.getElementById(styleId)) {
@@ -461,13 +426,10 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
     }
   }, []);
 
-  // Compute the initial content just once on mount.
-  // Uses unsaved content from the store (if available) or falls back to the file's content.
   const initialContent = useMemo(() => {
     return useEditorStore.getState().unsaved[tabId] || content;
   }, [tabId, content]);
 
-  // Store editor instance when created — state-driven so scroll effect re-runs when ready.
   const onCreateEditor = useCallback(
     (view: EditorView) => {
       if (view) {
@@ -478,11 +440,6 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
     [setEditor],
   );
 
-  // Restore scroll position and keep tracking per-tab scroll.
-  // currentTarget tracks where the user last intentionally scrolled to. Only wheel/touch
-  // events mark a scroll as user-initiated; editor-internal scrolls (CodeMirror cursor
-  // positioning, async effects) are immediately snapped back to currentTarget so they
-  // never corrupt the saved position.
   useLayoutEffect(() => {
     if (!editorView || !isActive) return;
 
@@ -513,7 +470,6 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
         currentTarget = scrollEl.scrollTop;
         setScrollPosition(tabId, scrollEl.scrollTop);
       } else {
-        // Editor-internal scroll — snap back to user's target
         applySavedScroll();
       }
     };
@@ -526,7 +482,6 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
     scrollEl.addEventListener("keydown", handleUserInteraction, { capture: true });
     scrollEl.addEventListener("mousedown", handleUserInteraction, { capture: true });
 
-    // Apply synchronously before the first paint so there is no visible jump.
     scrollEl.style.scrollBehavior = "auto";
     applySavedScroll();
 
@@ -557,20 +512,15 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
   }, [editorView, tabId, isActive, getScrollPosition, setScrollPosition]);
 
 
-  // Focus handler to track the active editor
   const handleFocus = useCallback(() => {
     setActiveEditor(tabId, initialContent, source, panelId);
   }, [tabId, initialContent, source, panelId, setActiveEditor]);
 
-  // onChange callback that updates the unified store
-  // For large files, debounce the updates to prevent UI freezing
   const onChange = useCallback(
     (value: string) => {
       if (isLargeFile) {
-        // For large files, debounce the store updates
         debouncedUpdate(value, tabId);
       } else {
-        // For small files, update immediately
         if (value === content) {
           clearUnsaved(tabId);
         } else {
@@ -583,19 +533,15 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
   );
 
   const languageExtension = useMemo(() => {
-    // Wrap in compartment so we can hot-swap it later without remounting
     return [langCompartment.of(isLargeFile ? [] : (langExt ? [langExt] : []))];
   }, [isLargeFile, langExt, langCompartment]);
 
-  // TODO: this should be refactored into a separate plugin
-  // Disable linting for large files to improve performance
   const fileExtension = source.split(".").pop()?.toLowerCase();
   const lintExtension = useMemo(() => {
     if (isLargeFile) return [];
     return fileExtension === "json" || fileExtension === "yml" || fileExtension === "yaml" ? [myLinter] : [];
   }, [fileExtension, isLargeFile]);
 
-  // Performance-focused editor configuration for large files
   const basicSetupOptions = useMemo(() => {
     if (isLargeFile) {
       return {
@@ -607,7 +553,6 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
     return undefined;
   }, [isLargeFile]);
 
-  // Memoize extensions array to prevent recreation on every render
   const extensions = useMemo(() => {
     const baseExtensions = [
       ...languageExtension,
@@ -619,7 +564,6 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
       ]),
     ];
 
-    // Only add highlightSelectionMatches for smaller files
     if (!isLargeFile) {
       baseExtensions.push(highlightSelectionMatches());
     }
