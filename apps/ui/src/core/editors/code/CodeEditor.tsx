@@ -401,7 +401,7 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
     getScrollPosition: state.getScrollPosition,
   }));
 
-  const { setActiveEditor, updateContent, setEditor, setStreamSnapshot } = useCodeEditorStore();
+  const { setActiveEditor, updateContent, setEditor, registerEditorView, unregisterEditorView, setStreamSnapshot } = useCodeEditorStore();
 
   const fileExtension = source.split(".").pop()?.toLowerCase();
 
@@ -512,12 +512,18 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
   const onCreateEditor = useCallback(
     (view: EditorView) => {
       if (view) {
+        setActiveEditor(tabId, initialContent, source, panelId);
         setEditor(view);
         setEditorView(view);
+        registerEditorView(tabId, view);
       }
     },
-    [setEditor],
+    [setEditor, setActiveEditor, registerEditorView, tabId, initialContent, source, panelId],
   );
+
+  useEffect(() => {
+    return () => { unregisterEditorView(tabId); };
+  }, [tabId, unregisterEditorView]);
 
   useLayoutEffect(() => {
     if (!editorView || !isActive) return;
@@ -597,6 +603,15 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
 
   const onChange = useCallback(
     (value: string) => {
+      // If another tab is registered as active, re-register this one.
+      // Tabs stay mounted when switching, so onCreateEditor doesn't re-fire —
+      // onChange is the reliable signal that THIS editor is the one being edited.
+      const store = useCodeEditorStore.getState();
+      if (store.activeEditor.tabId !== tabId) {
+        setActiveEditor(tabId, value, source, panelId);
+        if (editorView) setEditor(editorView);
+      }
+
       if (isLargeFile) {
         debouncedUpdate(value, tabId);
       } else {
@@ -608,7 +623,7 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
         updateContent(value);
       }
     },
-    [tabId, content, setUnsaved, clearUnsaved, updateContent, isLargeFile, debouncedUpdate],
+    [tabId, content, source, panelId, editorView, setUnsaved, clearUnsaved, updateContent, setActiveEditor, setEditor, isLargeFile, debouncedUpdate],
   );
 
   const languageExtension = useMemo(() => {
