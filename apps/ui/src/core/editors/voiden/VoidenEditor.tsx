@@ -920,6 +920,18 @@ const VoidenEditorInner = ({
       const sanitized = sanitizeDoc(parsed);
       const preserved = preserveUnknownNodesInJSON(sanitized, memoizedSchema);
       editor.commands.setContent(preserved, false);
+      // Rebuild highlight decorations after setContent. A full document replace
+      // collapses all mapped decoration positions, and if the content is identical
+      // doc.eq() returns true in the view.update hook — so the debounced rebuild
+      // is never scheduled. Dispatching the force metas here guarantees highlights
+      // are always correct after any programmatic content replacement.
+      if (!editor.isDestroyed) {
+        editor.view.dispatch(
+          editor.view.state.tr
+            .setMeta("forceHighlightUpdate", true)
+            .setMeta("forceVariableHighlightUpdate", true)
+        );
+      }
     };
 
     const reloadFromFile = async () => {
@@ -968,6 +980,13 @@ const VoidenEditorInner = ({
         if (diskJSON !== editorJSON) {
           const preserved = preserveUnknownNodesInJSON(sanitized, memoizedSchema);
           editor.commands.setContent(preserved, false);
+          if (!editor.isDestroyed) {
+            editor.view.dispatch(
+              editor.view.state.tr
+                .setMeta("forceHighlightUpdate", true)
+                .setMeta("forceVariableHighlightUpdate", true)
+            );
+          }
         }
       } catch {
         // ignore parse errors

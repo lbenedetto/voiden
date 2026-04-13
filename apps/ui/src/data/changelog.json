@@ -2,21 +2,26 @@
   {
     "version": "v1.4.5",
     "date": "13/04/2026",
-    "title": "External File Detection, Table Navigation & Border Fixes",
-    "description": "Patch release with external file change detection for the Voiden editor, runtime variables table border styling, table Enter-key navigation, and JSON/YAML linting disabled on large files to prevent UI freezes.",
+    "title": "File Import, Highlight Fixes & Editor Polish",
+    "description": "Patch release with collapsible whole-file and section imports, highlight persistence fixes, imported file play button, and editor input improvements.",
     "icon": "RefreshCw",
     "iconColor": "text-cyan-400",
     "bgColor": "bg-gradient-to-br from-cyan-900 to-teal-900",
     "changes": {
       "Added": [
-        "External file change detection for Voiden editor — clean tabs auto-reload when the file is modified on disk; dirty tabs show a toast with an Overwrite option to apply the disk version",
-        "On-activation content comparison — when switching back to a clean Voiden tab, the editor silently syncs with the current disk content if it has drifted",
-        "External file change detection for CodeEditor tabs — non-.void files now also detect disk changes and invalidate their tab content cache"
+        "Import whole file or section — @ file suggestions now support importing an entire .void file or a specific named section, both rendered as a collapsible linked block",
+        "External file change detection — when a .void file is modified on disk by an external process, clean tabs silently reload the latest content while dirty tabs show a toast prompting you to overwrite with the disk version or keep your unsaved changes",
+        "On-activation content sync — switching back to a clean Voiden tab compares the editor content against disk and silently applies any changes that occurred while the tab was hidden",
+        "External file change detection for all file types — both .void and code editor tabs now detect disk changes and refresh automatically"
       ],
       "Fixed": [
-        "Enter key in table cells now navigates to the next cell (or creates a new row when at the last cell) instead of inserting a newline",
-        "Runtime variables table cell borders now match the style of other request-block tables (headers, query, etc.)",
-        "JSON and YAML linting is now skipped on load for files larger than 500 KB — a banner appears once the file is ready with an option to enable highlighting and linting on demand"
+        "Enter key now works correctly when the autocomplete dropdown has no suggestions — previously the key event was consumed by the suggestion handler even when there was nothing to select, blocking newlines and other Enter-triggered actions",
+        "Play button on imported file blocks now correctly executes the request",
+        "Variable and environment highlights no longer disappear after saving or switching tabs",
+        "Importing an empty .void file no longer shows a 'Cannot load linked file' error",
+        "Current file is now excluded from @ file import suggestions",
+        "Enter key in table cells now navigates to the next cell instead of inserting a newline",
+        "Runtime variables table cell borders now match other request-block tables"
       ]
     }
   },

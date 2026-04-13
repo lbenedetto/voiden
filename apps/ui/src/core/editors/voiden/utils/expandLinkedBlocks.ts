@@ -110,8 +110,20 @@ export async function expandLinkedBlocks(
   return json;
 }
 
-// Re-export from core-extensions so callers don't need to change their import paths.
-export { getBlocksForSection } from "@voiden/core-extensions";
+/** Returns the blocks belonging to the section introduced by the separator with the given uid. */
+export function getBlocksForSection(content: any[], sectionUid: string): any[] {
+  let inSection = false;
+  const blocks: any[] = [];
+  for (const node of content) {
+    if (node.type === "request-separator") {
+      if (inSection) break;
+      if (node.attrs?.uid === sectionUid) inSection = true;
+    } else if (inSection) {
+      blocks.push(node);
+    }
+  }
+  return blocks;
+}
 
 /**
  * Expands linkedFile nodes in a document by inlining the referenced file's top-level

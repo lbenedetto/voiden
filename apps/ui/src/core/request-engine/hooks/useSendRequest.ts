@@ -251,6 +251,31 @@ export const  useSendRestRequest = (_editor: Editor) => {
         abortControllerRef.current = null;
       }
     },
+    runSection: async (sectionIndex: number) => {
+      if (!editor) return;
+      await showResponsePanel();
+      if (activeDocument?.id) {
+        useResponseStore.getState().setActiveResponseNodeForTab(activeDocument.id, "response-body");
+      }
+      useResponseStore.getState().setLoading(true, activeDocument?.id);
+      useResponseStore.getState().setCurrentRequestTabId(activeDocument?.id ?? null);
+      abortControllerRef.current = new AbortController();
+      try {
+        await requestOrchestrator.executeRequest(
+          editor,
+          activeEnv,
+          abortControllerRef.current.signal,
+          { sectionIndex }
+        );
+        queryClient.invalidateQueries({ queryKey: ["void-variable-keys"] });
+        queryClient.invalidateQueries({ queryKey: ["void-variable-data"] });
+      } catch (error) {
+        if (!(error instanceof Error && error.name === "AbortError")) {
+          const friendlyMessage = mapErrorToMessage(error);
+          useResponseStore.getState().setError(activeDocument?.id || null, friendlyMessage);
+        }
+      }
+    },
     refetchFromElement: (element: HTMLElement) => {
       // Compute section index by walking up from the clicked element to find
       // its top-level ProseMirror ancestor, then counting separators before it.

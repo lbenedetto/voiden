@@ -324,9 +324,14 @@ const FileLinkTippyContent = forwardRef((props: FileLinkListProps & { editor?: E
   // Instant client-side filter on corpus — no wait for server
   const allFileLinks = useMemo((): FileLinkItem[] => {
     const q = props.query.toLowerCase();
-    if (!q) return fileCorpus;
-    return fileCorpus.filter((f) => f.filename.toLowerCase().includes(q));
-  }, [fileCorpus, props.query]);
+    // Derive the current file's relative path to exclude it from suggestions
+    const currentSource = parentEditor?.storage?.source as string | undefined;
+    const currentRelPath = currentSource
+      ? currentSource.replace(/\\/g, "/").replace(activeProject.replace(/\\/g, "/"), "")
+      : null;
+    const base = q ? fileCorpus.filter((f) => f.filename.toLowerCase().includes(q)) : fileCorpus;
+    return currentRelPath ? base.filter((f) => f.filePath !== currentRelPath) : base;
+  }, [fileCorpus, props.query, parentEditor, activeProject]);
   
   // Use refs map to track all items
   const itemRefs = useRef<Map<number, HTMLDivElement>>(new Map());

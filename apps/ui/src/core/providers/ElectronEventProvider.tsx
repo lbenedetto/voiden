@@ -3,7 +3,7 @@ import React, { createContext, useContext, useEffect, useRef } from "react";
 import { EventEmitter } from "events";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { globalSaveFile, saveTabById } from "@/core/file-system/hooks";
+import { globalSaveFile, saveTabById, pendingAutoSavePaths } from "@/core/file-system/hooks";
 import { reloadVoidenEditor, useEditorStore } from "@/core/editors/voiden/VoidenEditor";
 import { useLoadEnv, useSetActiveEnv } from "@/core/environment/hooks";
 import { toast } from "@/core/components/ui/sonner";
@@ -195,6 +195,11 @@ export const ElectronEventProvider: React.FC<{ children: React.ReactNode }> = ({
         for (const [, panelData] of panelQueries) {
           for (const tab of panelData?.tabs ?? []) {
             if (tab.source?.replace(/\\/g, "/") !== changedPath) continue;
+            // Skip reload if this change was caused by our own autosave
+            if (pendingAutoSavePaths.has(changedPath)) {
+              pendingAutoSavePaths.delete(changedPath);
+              continue;
+            }
             const isDirty = !!useEditorStore.getState().unsaved[tab.id];
             if (isDirty) {
               toast.warning(`${tab.title} was modified on disk`, {

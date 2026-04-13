@@ -12,6 +12,10 @@ import { useCodeEditorStore } from "@/core/editors/code/CodeEditorStore";
 import { useEditorEnhancementStore } from "@/plugins";
 // import type { Tab } from "../../../electron/src/shared/types";
 
+// Tracks paths currently being written by the app so apy:changed events triggered
+// by our own autosave can be ignored (otherwise the editor reloads and resets cursor).
+export const pendingAutoSavePaths = new Set<string>();
+
 // Write a file in 512 KB IPC chunks to avoid freezing the main process for large
 // files (streamable files can be 5 MB–100 MB+). Falls back to a single write for
 // small content to keep the fast path fast.
@@ -518,13 +522,20 @@ export const saveTabById = async (tabId: string, options?: { silent?: boolean })
           return await saveFileUtil(path, content, panelId, tabId, voidenEditor.schema);
         }
         const markdown = prosemirrorToMarkdown(content, voidenEditor.schema);
+        const normalizedSource = tab.source.replace(/\\/g, "/");
+        pendingAutoSavePaths.add(normalizedSource);
         const filePath = await window.electron?.files.write(tab.source, markdown, tabId);
-        if (!filePath) return false;
+        if (!filePath) {
+          pendingAutoSavePaths.delete(normalizedSource);
+          return false;
+        }
         syncTabContentCache(markdown);
         // Only clear if no new changes arrived during the async write
         if (useEditorStore.getState().unsaved[tabId] === unsavedContent) {
           useEditorStore.getState().clearUnsaved(tabId);
         }
+        // Safety cleanup in case apy:changed never arrives
+        setTimeout(() => pendingAutoSavePaths.delete(normalizedSource), 3000);
         return true;
       } else {
         // Tab is not active
@@ -553,13 +564,20 @@ export const saveTabById = async (tabId: string, options?: { silent?: boolean })
           return await saveFileUtil(tab.source, unsavedContent, "main", tabId, schema);
         }
 
+        const normalizedSource2 = tab.source.replace(/\\/g, "/");
+        pendingAutoSavePaths.add(normalizedSource2);
         const filePath = await window.electron?.files.write(tab.source, unsavedMarkdown, tabId);
-        if (!filePath) return false;
+        if (!filePath) {
+          pendingAutoSavePaths.delete(normalizedSource2);
+          return false;
+        }
         syncTabContentCache(unsavedMarkdown);
         // Only clear if no new changes arrived during the async write
         if (useEditorStore.getState().unsaved[tabId] === unsavedContent) {
           useEditorStore.getState().clearUnsaved(tabId);
         }
+        // Safety cleanup in case apy:changed never arrives
+        setTimeout(() => pendingAutoSavePaths.delete(normalizedSource2), 3000);
         return true;
       }
     } else {

@@ -1,14 +1,15 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { Editor, Node, NodeViewWrapper, ReactNodeViewRenderer, mergeAttributes } from "@tiptap/react";
 import { JSONContent } from "@tiptap/core";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Link2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Link2, Play, Unlink } from "lucide-react";
 import { parseMarkdown } from "@/core/editors/voiden/markdownConverter";
 import { proseClasses, useVoidenExtensionsAndSchema } from "@/core/editors/voiden/VoidenEditor";
 import { openFile } from "./ExternalFile";
 import { getBlocksForSection } from "@/core/editors/voiden/utils/expandLinkedBlocks";
 import { Tip } from "@/core/components/ui/Tip";
+import { useSendRestRequest } from "@/core/request-engine/hooks";
 
 // Read-only editor that renders an entire file's worth of blocks.
 function FilePreviewEditor({ blocks }: { blocks: JSONContent[] }) {
@@ -60,9 +61,11 @@ const useGetLinkedFileBlocks = (originalFile: string, sectionUid: string | null,
       const absolutePath = await window.electron?.utils?.pathJoin(activeProject, originalFile);
       if (!absolutePath) throw new Error(`No absolute path for: ${originalFile}`);
       const markdown = await window.electron?.voiden?.getBlockContent(absolutePath);
-      if (!markdown || typeof markdown !== "string") {
+      if (typeof markdown !== "string") {
         throw new Error(`No content returned for: ${originalFile}`);
       }
+      // Empty file — return no blocks (not an error)
+      if (markdown.trim() === "") return [];
       const parsed = parseMarkdown(markdown, editor.schema);
       const allBlocks = parsed?.content ?? [];
       if (sectionUid !== null) {
@@ -73,10 +76,12 @@ const useGetLinkedFileBlocks = (originalFile: string, sectionUid: string | null,
   });
 };
 
-const LinkedFileNodeView = ({ node, editor }: any) => {
+const LinkedFileNodeView = ({ node, editor, getPos }: any) => {
   const { originalFile, sectionUid } = node.attrs;
   const [isCollapsed, setIsCollapsed] = useState(false);
   const queryClient = useQueryClient();
+  const nodeRef = useRef<HTMLDivElement>(null);
+  const { runSection } = useSendRestRequest(editor);
 
   const fileName = originalFile?.split("/").pop() || "Unknown file";
 
@@ -95,84 +100,111 @@ const LinkedFileNodeView = ({ node, editor }: any) => {
     openFile(absolutePath, fileName);
   };
 
+  const handlePlay = (e: React.MouseEvent) => {
+    e.preventDefault();
+    // Count separators before this node's ProseMirror position — more reliable
+    // than DOM walking since atom nodes may have extra wrapper elements.
+    const nodePos = getPos();
+    let sectionIndex = 0;
+    editor.state.doc.forEach((child: any, offset: number) => {
+      if (child.type.name === "request-separator" && offset < nodePos) {
+        sectionIndex++;
+      }
+    });
+    runSection(sectionIndex);
+  };
+
+  const handleUnlink = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!blocks || blocks.length === 0) return;
+    const pos = getPos();
+    editor
+      .chain()
+      .focus()
+      .insertContentAt({ from: pos, to: pos + node.nodeSize }, blocks)
+      .run();
+  };
+
   if (error || (!blocks && !isLoading)) {
     return (
       <NodeViewWrapper className="my-3">
-        <div
-          className="flex items-center gap-1.5 px-3 text-xs"
-          style={{ color: "var(--status-error, #ef4444)" }}
-        >
-          <Link2 size={11} />
-          <span>Cannot load linked file: {fileName}</span>
+        <div className="rounded-md border overflow-hidden" style={{ borderColor: "var(--ui-line)" }}>
+          <div className="h-8 px-3 flex items-center gap-2 bg-red-500/10 border-b border-red-500/30">
+            <Link2 size={12} style={{ color: "var(--icon-error)" }} />
+            <span className="text-xs text-red-600">Cannot load linked file: {fileName}</span>
+          </div>
         </div>
       </NodeViewWrapper>
     );
   }
 
   return (
-    <NodeViewWrapper className="my-1" contentEditable={false}>
-      {/* Separator-styled header */}
-      <div
-        className="flex items-center gap-2"
-        style={{ margin: "24px 0 0", userSelect: "none" }}
-        contentEditable={false}
-      >
+    <NodeViewWrapper className="my-3" contentEditable={false} ref={nodeRef}>
+      <div className="rounded-md border overflow-hidden" style={{ borderColor: "var(--ui-line)" }}>
+        {/* Header bar */}
         <div
-          style={{
-            flex: 1,
-            height: "2px",
-            backgroundColor: "var(--ui-line, #555)",
-            opacity: 0.35,
-            borderRadius: "1px",
-          }}
-        />
-
-        <div className="flex items-center gap-1.5 shrink-0">
-          <Link2 size={11} className="opacity-50" style={{ color: "var(--text)" }} />
-
-          <button
-            onClick={handleGoToOriginal}
-            className="text-[10px] font-bold tracking-widest uppercase hover:underline transition-colors"
-            style={{ color: "var(--text)", opacity: 0.6 }}
-            title={`Go to source: ${originalFile}`}
-          >
-            {fileName}
-          </button>
-
-          <Tip label={isCollapsed ? "Expand" : "Collapse"}>
+          className="h-8 px-3 flex items-center justify-between border-b bg-accent/5"
+          style={{ borderColor: "var(--ui-line)", userSelect: "none" }}
+          contentEditable={false}
+        >
+          {/* Left: icon + label + filename link */}
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <Link2 size={12} className="text-text opacity-50 shrink-0" />
+            <span className="text-[11px] font-semibold tracking-wide uppercase text-text opacity-60 shrink-0">
+              Imported:
+            </span>
             <button
-              onClick={() => setIsCollapsed((v) => !v)}
-              className="flex items-center justify-center w-5 h-5 rounded hover:bg-hover transition-colors"
-              style={{ color: "var(--text)", opacity: 0.5 }}
+              onClick={handleGoToOriginal}
+              className="text-xs text-accent hover:text-text transition-colors hover:underline truncate"
+              title={`Go to source: ${originalFile}`}
             >
-              {isCollapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+              {fileName}
             </button>
-          </Tip>
+          </div>
+
+          {/* Right: unlink + collapse */}
+          <div className="flex items-center gap-1 shrink-0">
+            <Tip label="Unlink — inline all blocks locally">
+              <button
+                onClick={handleUnlink}
+                className="flex items-center justify-center w-6 h-6 rounded hover:bg-hover text-comment hover:text-text transition-colors"
+              >
+                <Unlink size={12} />
+              </button>
+            </Tip>
+            <Tip label="Run section requests">
+              <button
+                onClick={handlePlay}
+                className="flex items-center justify-center w-6 h-6 rounded hover:bg-hover text-status-success transition-colors"
+              >
+                <Play size={12} />
+              </button>
+            </Tip>
+            <Tip label={isCollapsed ? "Expand" : "Collapse"}>
+              <button
+                onClick={() => setIsCollapsed((v) => !v)}
+                className="flex items-center justify-center w-6 h-6 rounded hover:bg-hover transition-colors"
+                style={{ color: "var(--text)", opacity: 1 }}
+              >
+                {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+              </button>
+            </Tip>
+          </div>
         </div>
 
-        <div
-          style={{
-            flex: 1,
-            height: "2px",
-            backgroundColor: "var(--ui-line, #555)",
-            opacity: 0.35,
-            borderRadius: "1px",
-          }}
-        />
+        {/* File content (collapsible) */}
+        {!isCollapsed && (
+          <div>
+            {isLoading ? (
+              <div className="p-3 text-xs text-comment flex items-center justify-center">
+                Loading {fileName}…
+              </div>
+            ) : blocks && blocks.length > 0 ? (
+              <FilePreviewEditor blocks={blocks} />
+            ) : null}
+          </div>
+        )}
       </div>
-
-      {/* File content (collapsible) */}
-      {!isCollapsed && (
-        <div className="mt-1">
-          {isLoading ? (
-            <div className="p-2 text-xs text-comment flex items-center justify-center">
-              Loading {fileName}…
-            </div>
-          ) : blocks && blocks.length > 0 ? (
-            <FilePreviewEditor blocks={blocks} />
-          ) : null}
-        </div>
-      )}
     </NodeViewWrapper>
   );
 };

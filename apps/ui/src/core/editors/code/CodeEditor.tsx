@@ -7,12 +7,14 @@ import { useEditorStore } from "../voiden/VoidenEditor";
 import { tags as t } from "@lezer/highlight";
 import { createTheme, type CreateThemeOptions } from "@uiw/codemirror-themes";
 import { linter, lintGutter } from "@codemirror/lint";
+import type { Diagnostic } from "@codemirror/lint";
+import { syntaxTree } from "@codemirror/language";
 import { createCustomSearchPanel, customSearchPanelStyles } from "./lib/extensions/customSearchPanel";
 
 import {
   javascript
 } from "@codemirror/lang-javascript";
-import { json } from "@codemirror/lang-json";
+import { json, jsonParseLinter } from "@codemirror/lang-json";
 import { html } from "@codemirror/lang-html";
 import { css } from "@codemirror/lang-css";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
@@ -288,9 +290,9 @@ const YAML_SPECTRAL_SIZE_LIMIT = 500 * 1024;
 const myYamlLinter = linter((view) => {
   if (view.state.doc.length > YAML_SPECTRAL_SIZE_LIMIT) return Promise.resolve([]);
   return lintYaml(view, []);
-}, { delay: 2000 });
+}, { delay: 1000 });
 
-const myJsonOASLinter = linter((view) => lintYaml(view, []), { delay: 2000 });
+const myJsonOASLinter = linter((view) => lintYaml(view, []), { delay: 1000 });
 
 const lintGutterTheme = EditorView.theme({
   ".cm-gutter.cm-gutter-lint": {
@@ -334,9 +336,25 @@ const lintGutterTheme = EditorView.theme({
   },
 });
 
+const syntaxErrorLinter = linter((view) => {
+  const diagnostics: Diagnostic[] = [];
+  syntaxTree(view.state).cursor().iterate((node) => {
+    if (node.type.isError) {
+      diagnostics.push({
+        from: node.from,
+        to: Math.max(node.to, node.from + 1),
+        severity: "error",
+        message: "Syntax error",
+      });
+    }
+  });
+  return diagnostics;
+});
+
 const getLintExtensions = (ext: string | undefined) => {
-  if (ext === "json") return [lintGutterTheme, lintGutter(), myJsonOASLinter];
+  if (ext === "json") return [lintGutterTheme, lintGutter(), linter(jsonParseLinter()), myJsonOASLinter];
   if (ext === "yml" || ext === "yaml") return [lintGutterTheme, lintGutter(), myYamlLinter];
+  if (ext) return [lintGutterTheme, lintGutter(), syntaxErrorLinter];
   return [];
 };
 
