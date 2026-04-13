@@ -667,6 +667,16 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
     return () => clearTimeout(t);
   }, [isApplyingFeatures]);
 
+  // For non-streamable large/medium files with lintable extensions (json/yaml),
+  // linting is skipped on load — show the opt-in banner once the editor is ready.
+  const isLintableExt = fileExtension === "json" || fileExtension === "yml" || fileExtension === "yaml";
+  useEffect(() => {
+    if (streamable || highlighted) return;
+    if ((isMediumFile || isLargeFile) && isLintableExt && editorView) {
+      setCanHighlight(true);
+    }
+  }, [streamable, isMediumFile, isLargeFile, isLintableExt, editorView, highlighted]);
+
   const handleEnableHighlight = useCallback(() => {
     if (!editorView) return;
     setIsApplyingFeatures(true);
