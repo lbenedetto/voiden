@@ -21,7 +21,8 @@
         "Importing an empty .void file no longer shows a 'Cannot load linked file' error",
         "Current file is now excluded from @ file import suggestions",
         "Enter key in table cells now navigates to the next cell instead of inserting a newline",
-        "Runtime variables table cell borders now match other request-block tables"
+        "Runtime variables table cell borders now match other request-block tables",
+        "Simple assertions now work correctly on plain-text response bodies — asserting against body or response.body no longer fails when the response is not JSON"
       ]
     }
   },
