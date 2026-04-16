@@ -374,7 +374,6 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
   const activeEditor = useCodeEditorStore((state) => state.activeEditor);
   const streamSnapshots = useCodeEditorStore((state) => state.streamSnapshots);
 
-  // If tab content load times out (30s), close the tab and show a toast
   useEffect(() => {
     if (!tabContentError) return;
     const err = tabContentError as Error;
@@ -387,7 +386,6 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
     });
   }, [tabContentError, tabs?.activeTabId, panelId, closePanelTab]);
 
-  // If tab content load times out (30s), close the tab and show a toast
   useEffect(() => {
     if (!tabContentError) return;
     const err = tabContentError as Error;
@@ -400,14 +398,11 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
     });
   }, [tabContentError, tabs?.activeTabId, panelId, closePanelTab]);
 
-  // Subscribe to unsaved Voiden editor content for the active tab so predicates
-  // are re-evaluated whenever the editor content changes (not just on file save).
+ 
   const activeTabId = tabContent?.tabId;
   useEditorStore((state) => activeTabId ? state.unsaved[activeTabId] : undefined);
 
-  // Apply saved scroll position synchronously when the active tab changes.
-  // Fires before paint so there is never a visible frame at the wrong position,
-  // regardless of which editor type is becoming active.
+  
   useLayoutEffect(() => {
     if (!activeTabId) return;
     const scrollContainer = document.getElementById("code-editor-container");
@@ -470,25 +465,19 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
     });
   }, [tabs?.tabs]);
 
-  // Get md-preview helpers dynamically if plugin is loaded
-  // IMPORTANT: Only call the hook if it exists to prevent crashes during plugin reload
+  
   const mdPreviewHelpers = getMdPreviewHelpers();
 
-  // Default to "edit" mode and use the helper hook only if available
-  // We wrap the hook call in a try-catch and check existence to handle plugin reload gracefully
   let viewMode = "edit";
 
   if (mdPreviewHelpers?.useMdViewStore) {
     try {
-      // Call the Zustand hook from the plugin
       viewMode = mdPreviewHelpers.useMdViewStore((state: any) => state?.viewMode) || "edit";
     } catch (error) {
-      // If hook fails during plugin reload, silently default to edit mode
       console.warn('[PanelContent] md-preview hook unavailable, defaulting to edit mode');
     }
   }
 
-  // Get live content for markdown preview (unsaved changes)
   const getLiveContent = () => {
     if (tabContent?.tabId === activeEditor.tabId && activeEditor.content) {
       return activeEditor.content;
@@ -504,12 +493,9 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
     })
     return <EmptyPanel />;
   }
-  // If tabContent is not yet available, you can return a loader
   if (!tabContent) return null;
 
-  // Build the cached document editors block. We always render this (even when a
-  // non-document tab like Settings is active) so that VoidenEditor / CodeEditor
-  // never unmounts — keeping scroll positions intact and avoiding the remount glitch.
+  
   const isDocumentActive = tabContent.type === "document";
   const activeDocTabContent = isDocumentActive ? tabContent : null;
   const visibleDocumentTabs = activeDocTabContent
@@ -519,12 +505,21 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
   if (activeDocTabContent && !visibleDocumentTabIds.includes(activeDocTabContent.tabId)) {
     visibleDocumentTabIds.push(activeDocTabContent.tabId);
   }
-  // For streamable files tab.content is null — use the per-tab snapshot stored
-  // after streaming completes so predicates survive tab switches.
+ 
+  const liveContentForPredicate = (() => {
+    if (!activeDocTabContent) return null;
+    const { tabId, title } = activeDocTabContent;
+    if (title.endsWith(".void")) {
+      return useEditorStore.getState().unsaved[tabId] ?? activeDocTabContent.content;
+    }
+    if (activeEditor.tabId === tabId && activeEditor.content) {
+      return activeEditor.content || activeDocTabContent.content;
+    }
+    return streamSnapshots.get(tabId) ?? activeDocTabContent.content;
+  })();
+
   const tabDataForPredicate = activeDocTabContent
-    ? (!activeDocTabContent.content && streamSnapshots.get(activeDocTabContent.tabId))
-      ? { ...activeDocTabContent, content: streamSnapshots.get(activeDocTabContent.tabId) }
-      : activeDocTabContent
+    ? { ...activeDocTabContent, content: liveContentForPredicate }
     : null;
   const actionsToDisplay = tabDataForPredicate
     ? editorActions.filter((action) => !action.predicate || action.predicate(tabDataForPredicate))
@@ -533,7 +528,6 @@ const PanelContentInner = ({ panelId }: { panelId: string }) => {
   const cachedEditorsBlock = visibleDocumentTabIds.length > 0 && (
     <div className="h-full flex flex-col" style={{ display: isDocumentActive ? "flex" : "none" }}>
       <div className="h-8 px-5 flex items-center justify-between w-full flex-shrink-0">
-        {/* editor action plugins go here */}
         <div className="flex items-center justify-between space-x-2 w-full">
           <div className="flex-1">{/* todo things go here */}</div>
           <div className="flex space-x-2">
