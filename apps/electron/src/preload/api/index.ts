@@ -27,6 +27,7 @@ import {
   cliApi,
   skillsApi,
   variablesApi,
+  projectApi,
   mainWindow
 } from "./misc";
 
@@ -58,7 +59,9 @@ export const electronApi = {
   skills: skillsApi,
   themes: themesApi,
   autosave: autosaveApi,
+  project: projectApi,
   mainwindow: mainWindow,
   logger: loggerAPI,
   processMonitor: processMonitorAPI,
+  platform: process.platform,
 };

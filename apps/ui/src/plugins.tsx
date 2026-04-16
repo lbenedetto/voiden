@@ -371,7 +371,14 @@ export const createPlugin = (pluginModule: (context: PluginContext) => Plugin, e
         if (type === "voiden") {
           return useVoidenEditorStore.getState().editor;
         } else {
-          return useCodeEditorStore.getState().activeEditor.editor;
+          const view = useCodeEditorStore.getState().activeEditor.editor;
+          if (!view) return null;
+          // EditorView has no .getText() — expose a compatible shim so plugin
+          // callers can use the same getText() pattern as the Voiden (TipTap) editor.
+          return {
+            getText: () => view.state.doc.toString(),
+            _view: view,
+          };
         }
       },
       getActiveProject: async () => {

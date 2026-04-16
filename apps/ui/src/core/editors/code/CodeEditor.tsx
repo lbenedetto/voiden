@@ -543,6 +543,16 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
     return () => { unregisterEditorView(tabId); };
   }, [tabId, unregisterEditorView]);
 
+  // When this tab becomes the active visible tab, sync the store so callers like
+  // the OpenAPI preview button always read the correct editor — not a stale one
+  // from whichever tab was last typed into.
+  useEffect(() => {
+    if (!isActive || !editorView) return;
+    const currentContent = editorView.state.doc.toString();
+    setActiveEditor(tabId, currentContent, source, panelId);
+    setEditor(editorView);
+  }, [isActive, editorView, tabId, source, panelId, setActiveEditor, setEditor]);
+
   useLayoutEffect(() => {
     if (!editorView || !isActive) return;
 
@@ -614,10 +624,6 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
     };
   }, [editorView, tabId, isActive, getScrollPosition, setScrollPosition]);
 
-
-  const handleFocus = useCallback(() => {
-    setActiveEditor(tabId, initialContent, source, panelId);
-  }, [tabId, initialContent, source, panelId, setActiveEditor]);
 
   const onChange = useCallback(
     (value: string) => {
@@ -749,7 +755,6 @@ export const CodeEditor = memo(({ tabId, content, source, panelId, isActive = tr
           value={initialContent}
           theme={voidenTheme}
           onChange={streamable ? undefined : onChange}
-          onFocus={handleFocus}
           extensions={extensions}
           onCreateEditor={onCreateEditor}
           basicSetup={basicSetupOptions}
