@@ -5954,16 +5954,16 @@ __metadata:
   linkType: hard
 
 "@smithy/config-resolver@npm:>=4.4.0":
-  version: 4.4.16
-  resolution: "@smithy/config-resolver@npm:4.4.16"
+  version: 4.4.17
+  resolution: "@smithy/config-resolver@npm:4.4.17"
   dependencies:
     "@smithy/node-config-provider": "npm:^4.3.14"
     "@smithy/types": "npm:^4.14.1"
     "@smithy/util-config-provider": "npm:^4.2.2"
-    "@smithy/util-endpoints": "npm:^3.4.1"
+    "@smithy/util-endpoints": "npm:^3.4.2"
     "@smithy/util-middleware": "npm:^4.2.14"
     tslib: "npm:^2.6.2"
-  checksum: 10c0/92aa853e11d4bdcfae66d8931b7eb92b9585dd5583ee7dccbb05d297f56521701b13af2fcadec08547006879e1f17d529d41c7aa284fde1100e9b2d6a76c514d
+  checksum: 10c0/44e653e2ed31bf765f0b30ca404dc3e02f30ad800971f812a6363b71da8d37de5d7d8901d9db4d86d2493f25037904f35c01bbb1a83a2a72e7e7b201ce5c411a
   languageName: node
   linkType: hard
 
@@ -6494,14 +6494,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@smithy/util-endpoints@npm:^3.4.1":
-  version: 3.4.1
-  resolution: "@smithy/util-endpoints@npm:3.4.1"
+"@smithy/util-endpoints@npm:^3.4.2":
+  version: 3.4.2
+  resolution: "@smithy/util-endpoints@npm:3.4.2"
   dependencies:
     "@smithy/node-config-provider": "npm:^4.3.14"
     "@smithy/types": "npm:^4.14.1"
     tslib: "npm:^2.6.2"
-  checksum: 10c0/a8923934c275b9a4a640cb6ddd2ed2f36dcc2e5400d9e728b7a45b93528fdb798ed9c057af98f769e094aaeb885d5b242436abba8877b96770d7478212d3efdf
+  checksum: 10c0/602e05c8dc43d8902604bac74b717d09da5b4f1994dcdd5025bffeced6002eaa0612ae1ccbe7a0e636a3d92a60747715e22cbacf8feeb672394d15b6ae211b13
   languageName: node
   linkType: hard
 
