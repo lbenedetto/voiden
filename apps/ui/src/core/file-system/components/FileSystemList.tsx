@@ -1388,10 +1388,16 @@ export const FileSystemList = () => {
   useElectronEvent<{ path: string }>("file:new", (eventData) => {
     const newPath = eventData?.path;
     if (!newPath) return;
-    const parentPath = getParentPath(newPath);
-    if (parentPath) {
-      refreshDir(parentPath);
+    // Walk up from the immediate parent until we find an ancestor already
+    // rendered in the tree. Needed when a deep path (e.g. from OpenAPI import)
+    // is created before its intermediate directories exist in the tree.
+    let target = getParentPath(newPath);
+    while (target && !treeRef.current?.get(target)) {
+      const parent = getParentPath(target);
+      if (!parent || parent === target) { target = ''; break; }
+      target = parent;
     }
+    if (target) refreshDir(target);
   });
 
   useElectronEvent<{ path: string }>("file:duplicate", (eventData) => {
