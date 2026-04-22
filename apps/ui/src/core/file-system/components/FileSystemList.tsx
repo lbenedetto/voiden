@@ -863,6 +863,9 @@ export const FileSystemList = () => {
   useElectronEvent("file:delete-start", () => {
     setShowDeleteProgress(true);
   });
+  useElectronEvent("file:delete-complete", () => {
+    setShowDeleteProgress(false);
+  });
   useElectronEvent("file:bulk-delete-complete", () => {
     setShowDeleteProgress(false);
   });

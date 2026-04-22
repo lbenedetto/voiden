@@ -217,6 +217,9 @@ export const ElectronEventProvider: React.FC<{ children: React.ReactNode }> = ({
           }
         }
       },
+      "file:delete-complete":(_event: any, data: any) => {
+        handleEvent("file:delete-complete", data);
+      },
       "file:bulk-delete-complete": (_event: any, data: any) => {
         handleEvent("file:bulk-delete-complete", data);
       },

@@ -123,6 +123,7 @@ export const createFileTreeContextMenu = (mainWindow: BrowserWindow) => {
               setDeleting(data.path, false);
             }
             logger.info('filesystem', `Folder trashed: ${data.name}`, { path: data.path });
+            safeSend(senderWindow, "file:delete-complete");
 
             // Close any open tabs whose source lives inside the deleted directory.
             const delAppState = getAppState(event);
@@ -196,6 +197,7 @@ export const createFileTreeContextMenu = (mainWindow: BrowserWindow) => {
               setDeleting(data.path, false);
             }
             logger.info('filesystem', `File trashed: ${data.name}`, { path: data.path });
+            safeSend(senderWindow, "file:delete-complete");
 
             const appState = getAppState(event);
             const layout = appState.activeDirectory ? appState.directories[appState.activeDirectory]?.layout : appState.unsaved.layout;
