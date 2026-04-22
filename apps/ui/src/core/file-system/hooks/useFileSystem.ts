@@ -21,10 +21,6 @@ const notifyLockedSave = () => {
 };
 // import type { Tab } from "../../../electron/src/shared/types";
 
-// Tracks paths currently being written by the app so apy:changed events triggered
-// by our own autosave can be ignored (otherwise the editor reloads and resets cursor).
-export const pendingAutoSavePaths = new Set<string>();
-
 // Write a file in 512 KB IPC chunks to avoid freezing the main process for large
 // files (streamable files can be 5 MB–100 MB+). Falls back to a single write for
 // small content to keep the fast path fast.
@@ -113,7 +109,7 @@ export const invalidateOnFileSave = (path: string, panelId: string, tabId: strin
 };
 
 export const saveFileUtil = async (path: string | null, content: string, panelId: string, tabId: string, schema: Schema) => {
-  if (isPathInsideLockedProject(path)) {
+  if (await isPathInsideLockedProject(path)) {
     notifyLockedSave();
     return;
   }
@@ -149,6 +145,7 @@ export const useFileTree = () => {
   return useQuery({
     queryKey: ["files:tree", activeDirectory],
     enabled: !!activeDirectory,
+    refetchInterval: false,
     gcTime: 0,
     queryFn: async (): Promise<FileTree | undefined> => {
       if (!activeDirectory) return undefined;
@@ -170,6 +167,7 @@ export const usePrefetchFileList = () => {
     queryKey: ["files:flatList", activeDirectory],
     enabled: !!activeDirectory,
     staleTime: Infinity,
+    refetchInterval: false,
     gcTime: 0,
     queryFn: async (): Promise<{ name: string; path: string }[]> => {
       if (!activeDirectory) return [];
@@ -516,7 +514,7 @@ export const saveTabById = async (tabId: string, options?: { silent?: boolean })
     return false; // Tab not found or not persisted
   }
 
-  if (isPathInsideLockedProject(tab.source)) {
+  if (await isPathInsideLockedProject(tab.source)) {
     // Project is locked — keep in-memory edits but do not persist to disk.
     // Autosave (silent) stays silent; manual callers see a non-blocking no-op.
     if (!options?.silent) notifyLockedSave();
@@ -542,20 +540,13 @@ export const saveTabById = async (tabId: string, options?: { silent?: boolean })
           return await saveFileUtil(path, content, panelId, tabId, voidenEditor.schema);
         }
         const markdown = prosemirrorToMarkdown(content, voidenEditor.schema);
-        const normalizedSource = tab.source.replace(/\\/g, "/");
-        pendingAutoSavePaths.add(normalizedSource);
         const filePath = await window.electron?.files.write(tab.source, markdown, tabId);
-        if (!filePath) {
-          pendingAutoSavePaths.delete(normalizedSource);
-          return false;
-        }
+        if (!filePath) return false;
         syncTabContentCache(markdown);
         // Only clear if no new changes arrived during the async write
         if (useEditorStore.getState().unsaved[tabId] === unsavedContent) {
           useEditorStore.getState().clearUnsaved(tabId);
         }
-        // Safety cleanup in case apy:changed never arrives
-        setTimeout(() => pendingAutoSavePaths.delete(normalizedSource), 3000);
         return true;
       } else {
         // Tab is not active
@@ -584,20 +575,13 @@ export const saveTabById = async (tabId: string, options?: { silent?: boolean })
           return await saveFileUtil(tab.source, unsavedContent, "main", tabId, schema);
         }
 
-        const normalizedSource2 = tab.source.replace(/\\/g, "/");
-        pendingAutoSavePaths.add(normalizedSource2);
         const filePath = await window.electron?.files.write(tab.source, unsavedMarkdown, tabId);
-        if (!filePath) {
-          pendingAutoSavePaths.delete(normalizedSource2);
-          return false;
-        }
+        if (!filePath) return false;
         syncTabContentCache(unsavedMarkdown);
         // Only clear if no new changes arrived during the async write
         if (useEditorStore.getState().unsaved[tabId] === unsavedContent) {
           useEditorStore.getState().clearUnsaved(tabId);
         }
-        // Safety cleanup in case apy:changed never arrives
-        setTimeout(() => pendingAutoSavePaths.delete(normalizedSource2), 3000);
         return true;
       }
     } else {
@@ -634,6 +618,46 @@ export const saveTabById = async (tabId: string, options?: { silent?: boolean })
   return false;
 };
 
+export const useFileExists = (filePath?: string) => {
+  return useQuery({
+    queryKey: ["files:exists", filePath],
+    enabled: !!filePath,
+    queryFn: async () => {
+      if (!filePath) return false;
+      return window.electron?.files.exists?.(filePath) ?? false;
+    },
+  });
+};
+
+export const useCreateDirectory = () => {
+  const { data: activeDirectory } = useGetActiveDirectory();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (dirPath: string) => {
+      if (!activeDirectory) throw new Error("No active directory");
+      return window.electron?.files.createDirectory?.(dirPath);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["files:tree", activeDirectory] });
+    },
+  });
+};
+
+export const useCopyFile = () => {
+  const { data: activeDirectory } = useGetActiveDirectory();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ sourcePath, destPath }: { sourcePath: string; destPath: string }) => {
+      return window.electron?.files.copy?.(sourcePath, destPath);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["files:tree", activeDirectory] });
+    },
+  });
+};
+
 // Global save function that works regardless of editor focus
 export const globalSaveFile = async () => {
   // First try to determine the active tab and its type
@@ -659,7 +683,7 @@ export const globalSaveFile = async () => {
       const { activeEditor, editorViews } = useCodeEditorStore.getState();
 
       if (activeEditor.tabId && activeEditor.source) {
-        if (isPathInsideLockedProject(activeEditor.source)) {
+        if (await isPathInsideLockedProject(activeEditor.source)) {
           notifyLockedSave();
           return true;
         }
@@ -712,7 +736,7 @@ export const globalSaveFile = async () => {
     // If no editor found, try to get the active document as fallback
     const activePath = await window.electron?.active.getDocument();
     if (activePath) {
-      if (isPathInsideLockedProject(activePath)) {
+      if (await isPathInsideLockedProject(activePath)) {
         notifyLockedSave();
         return false;
       }

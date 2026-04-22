@@ -25,8 +25,9 @@ import { createEmptyProject, createSampleProject } from "../projectUtils";
 import { getActiveStates, saveActiveStates } from "../tabs";
 import { getCachedGitStatus } from "../git";
 import { getActiveProject, findTabById, getAppState } from "../state";
-import { scoreFiles, type MatchedFragment } from "../fileSearch";
+import { scoreFiles, type MatchedFragment } from "@voiden/fuzzy-search";
 import { saveState, deleteAutosaveFile } from "../persistState";
+import { setWriting } from "../fileWatcher";
 import { FileTreeItem } from "../../types";
 import { PanelElement } from "../../../shared/types";
 import { fold } from "fp-ts/lib/Tree";
@@ -313,6 +314,7 @@ export function registerFileIpcHandlers() {
       filePath = chosenFilePath;
     }
 
+    if (filePath.endsWith(".void")) setWriting(filePath);
     await fs.promises.writeFile(filePath, content, "utf8");
     treeResultCache.clear();
 
@@ -345,6 +347,7 @@ export function registerFileIpcHandlers() {
     "files:appendChunk",
     async (_event, filePath: string, chunk: string, isFirst: boolean, isLast: boolean) => {
       if (isFirst) {
+        if (filePath.endsWith(".void")) setWriting(filePath);
         await fs.promises.writeFile(filePath, chunk, "utf8");
       } else {
         await fs.promises.appendFile(filePath, chunk, "utf8");
@@ -720,15 +723,14 @@ export function registerFileIpcHandlers() {
 
     const allPaths = session.allPaths;
 
-    type FragmentTuple = [number, number];
     type Result = {
       name: string;
       path: string;
-      pathFragments?: FragmentTuple[];
-      filenameFragments?: FragmentTuple[];
+      pathFragments?: MatchedFragment[];
+      filenameFragments?: MatchedFragment[];
     };
-    const tuplize = (frags: MatchedFragment[]): FragmentTuple[] | undefined =>
-        frags.length === 0 ? undefined : frags.map((f) => [f.startOffset, f.endOffset]);
+    const orUndefined = (frags: MatchedFragment[]): MatchedFragment[] | undefined =>
+        frags.length === 0 ? undefined : frags;
     let results: Result[];
 
     if (!normalizedQuery) {
@@ -751,8 +753,8 @@ export function registerFileIpcHandlers() {
       results = scored.slice(0, TOP_N).map(({ path: p, match }) => ({
         name: path.basename(p),
         path: p,
-        pathFragments: tuplize(match.pathFragments),
-        filenameFragments: tuplize(match.filenameFragments),
+        pathFragments: orUndefined(match.pathFragments),
+        filenameFragments: orUndefined(match.filenameFragments),
       }));
     }
 

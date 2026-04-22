@@ -123,6 +123,7 @@ export const createFileTreeContextMenu = (mainWindow: BrowserWindow) => {
               setDeleting(data.path, false);
             }
             logger.info('filesystem', `Folder trashed: ${data.name}`, { path: data.path });
+            safeSend(senderWindow, "file:delete-complete");
 
             // Close any open tabs whose source lives inside the deleted directory.
             const delAppState = getAppState(event);
@@ -160,7 +161,7 @@ export const createFileTreeContextMenu = (mainWindow: BrowserWindow) => {
     } else {
       menu = Menu.buildFromTemplate([
         {
-          label: "Reveal in Finder",
+          label: process.platform==='darwin'?"Reveal in Finder":(process.platform==='win32'?"Reveal in Explorer":"Reveal Containing Folder"),
           accelerator: "Option+Cmd+R",
           click: () => {
             shell.showItemInFolder(data.path);
@@ -196,6 +197,7 @@ export const createFileTreeContextMenu = (mainWindow: BrowserWindow) => {
               setDeleting(data.path, false);
             }
             logger.info('filesystem', `File trashed: ${data.name}`, { path: data.path });
+            safeSend(senderWindow, "file:delete-complete");
 
             const appState = getAppState(event);
             const layout = appState.activeDirectory ? appState.directories[appState.activeDirectory]?.layout : appState.unsaved.layout;
@@ -274,7 +276,9 @@ export const createFileTreeContextMenu = (mainWindow: BrowserWindow) => {
               try {
                 await shell.trashItem(item.path);
               } finally {
-                setDeleting(item.path, false);
+                // Keep the guard alive briefly so chokidar's async unlink event
+                // (which fires after trashItem resolves) is still suppressed.
+                setTimeout(() => setDeleting(item.path, false), 500);
               }
               logger.info('filesystem', `Bulk: folder trashed: ${item.name}`, { path: item.path });
 
@@ -307,7 +311,9 @@ export const createFileTreeContextMenu = (mainWindow: BrowserWindow) => {
               try {
                 await shell.trashItem(item.path);
               } finally {
-                setDeleting(item.path, false);
+                // Keep the guard alive briefly so chokidar's async unlink event
+                // (which fires after trashItem resolves) is still suppressed.
+                setTimeout(() => setDeleting(item.path, false), 500);
               }
               logger.info('filesystem', `Bulk: file trashed: ${item.name}`, { path: item.path });
 
@@ -331,6 +337,7 @@ export const createFileTreeContextMenu = (mainWindow: BrowserWindow) => {
           }
 
           logger.info('filesystem', `Bulk delete complete: ${data.length} items`);
+          safeSend(bulkSenderWindow, "file:bulk-delete-complete", { count: data.length });
         },
       },
     ];

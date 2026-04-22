@@ -6,9 +6,10 @@ export const filesApi = {
     ipcRenderer.invoke("files:getFiles", filePaths, isExternal),
   tree: (directory: string) => ipcRenderer.invoke("files:tree", directory),
   expandDir: (dirPath: string) => ipcRenderer.invoke("files:expandDir", dirPath),
-  flatList: (rootDir: string, sessionId?: string | null, query?: string, currentFilePath?: string): Promise<{ name: string; path: string }[]> =>
-    ipcRenderer.invoke("files:flatList", rootDir, sessionId ?? null, query, currentFilePath),
-  flatListCloseSession: (sessionId: string): Promise<void> =>
+  expandDirAll: (dirPath: string): Promise<Record<string, any[]>> => ipcRenderer.invoke("files:expandDirAll", dirPath),
+  flatList: (rootDir: string, sessionId?: string, query?: string): Promise<{ name: string; path: string; pathFragments?: any[]; filenameFragments?: any[] }[]> =>
+    ipcRenderer.invoke("files:flatList", rootDir, sessionId, query),
+  flatListCloseSession: (sessionId: string): void =>
     ipcRenderer.invoke("files:flatListCloseSession", sessionId),
   read: (path: string) => ipcRenderer.invoke("files:read", path),
   readChunk: (path: string, offset: number, size: number): Promise<{ content: string; bytesRead: number; nextOffset: number; done: boolean; totalSize: number }> =>

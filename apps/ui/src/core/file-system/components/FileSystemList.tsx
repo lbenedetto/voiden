@@ -146,7 +146,7 @@ const TreeActionsContext = React.createContext<{
 function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode, onFolderToggle, refreshDir, expandedDirsRef, treeRef }: TreeNodeProps) {
   const [error, setError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [dragOverTimer, setDragOverTimer] = useState<NodeJS.Timeout | null>(null);
+  const dragOverTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
   const { dragOverParentId, setDragOverParentId } = useContext(DragOverContext);
   const { expandAllRecursive } = useContext(TreeActionsContext);
@@ -163,21 +163,22 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode, on
     if (!isInternalDropTargetFolder) return;
     setIsDragOver(true);
     setDragOverParentId(null);
-    if (!node.isOpen && !dragOverTimer) {
-      const timer = setTimeout(() => {
-        node.open();
-      }, 200);
-      setDragOverTimer(timer);
+    if (!node.isOpen && !dragOverTimerRef.current) {
+      dragOverTimerRef.current = setTimeout(() => {
+        dragOverTimerRef.current = null;
+        if (!node.isOpen) onFolderToggle(node);
+      }, 800);
     }
-  }, [isInternalDropTargetFolder, node, dragOverTimer, setDragOverParentId]);
+  }, [isInternalDropTargetFolder, node, setDragOverParentId, onFolderToggle]);
 
   useEffect(() => {
     return () => {
-      if (dragOverTimer) {
-        clearTimeout(dragOverTimer);
+      if (dragOverTimerRef.current) {
+        clearTimeout(dragOverTimerRef.current);
+        dragOverTimerRef.current = null;
       }
     };
-  }, [dragOverTimer]);
+  }, []);
 
   const getGitStatusClass = (gitStatus: any) => {
     if (!gitStatus) return "";
@@ -308,13 +309,14 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode, on
         // Refresh parent directory to see renamed node with new name
         await refreshDir(parentPath);
         
-        // After refresh completes, manually re-open the renamed folder if it was expanded
+        // After refresh, re-open the renamed folder if it was expanded.
+        // Use onFolderToggle (expandLazyNode) — not raw open() — so children
+        // are fetched from disk first (the renamed folder is a lazy stub after refresh).
         if (wasFolderOpen) {
-          // Give the tree a moment to update before finding and opening the renamed node
           setTimeout(() => {
             const renamedNode = treeRef.current?.get(newPath);
             if (renamedNode && !renamedNode.isOpen) {
-              renamedNode.open();
+              onFolderToggle(renamedNode);
             }
           }, 0);
         }
@@ -410,9 +412,9 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode, on
   const handleDrop = async (e: React.DragEvent) => {
     setIsDragOver(false);
     setDragOverParentId(null);
-    if (dragOverTimer) {
-      clearTimeout(dragOverTimer);
-      setDragOverTimer(null);
+    if (dragOverTimerRef.current) {
+      clearTimeout(dragOverTimerRef.current);
+      dragOverTimerRef.current = null;
     }
 
     if (!isExternalFileDrag(e)) {
@@ -489,11 +491,11 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode, on
       setIsDragOver(true);
       setDragOverParentId(null);
 
-      if (!node.isOpen && !dragOverTimer) {
-        const timer = setTimeout(() => {
-          node.open();
-        }, 200);
-        setDragOverTimer(timer);
+      if (!node.isOpen && !dragOverTimerRef.current) {
+        dragOverTimerRef.current = setTimeout(() => {
+          dragOverTimerRef.current = null;
+          if (!node.isOpen) onFolderToggle(node);
+        }, 800);
       }
       return;
     }
@@ -512,11 +514,11 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode, on
 
     setDragOverParentId(parentId);
 
-    if (node.data.type === "folder" && !node.isOpen && !dragOverTimer) {
-      const timer = setTimeout(() => {
-        node.open();
-      }, 200);
-      setDragOverTimer(timer);
+    if (node.data.type === "folder" && !node.isOpen && !dragOverTimerRef.current) {
+      dragOverTimerRef.current = setTimeout(() => {
+        dragOverTimerRef.current = null;
+        if (!node.isOpen) onFolderToggle(node);
+      }, 800);
     } else if (node.data.type === "folder") {
       const closeAllDescendants = (parentNode: typeof node) => {
         if (!parentNode.children) return;
@@ -549,9 +551,9 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode, on
       setIsDragOver(false);
       setDragOverParentId(null);
 
-      if (dragOverTimer) {
-        clearTimeout(dragOverTimer);
-        setDragOverTimer(null);
+      if (dragOverTimerRef.current) {
+        clearTimeout(dragOverTimerRef.current);
+        dragOverTimerRef.current = null;
       }
     }
   };
@@ -709,8 +711,8 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode, on
         activeFile?.source === node.data.path && !isDragOver && "bg-active",
         node.isSelected && node.tree.selectedNodes.length > 1 && activeFile?.source !== node.data.path && !isDragOver && "bg-accent/20",
         node.isFocused && !isDragOver && "ring-0",
-        (isDragOver || isInternalDropTargetFolder) && "bg-accent/30 border-l-2 border-accent",
-        isSiblingHighlight && !isDragOver && !isInternalDropTargetFolder && "bg-accent/30 border-l-2 border-accent",
+        (isDragOver  || isInternalDropTargetFolder) && `bg-accent/30 ${node.data.type ==='folder' ? 'border-l-2 border-accent' : ''}`,
+        isSiblingHighlight && !isDragOver && !isInternalDropTargetFolder && "bg-accent/30 hover:bg-accent/30",
       )}
       onClick={handleSelect}
       onContextMenu={handleContextMenu}
@@ -753,10 +755,6 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode, on
             >
               {node.data.name}
             </span>
-          )}
-          {/* Show "(empty)" hint when a non-lazy folder is open and has no children */}
-          {node.data.type === "folder" && node.isOpen && !node.data.lazy && (!node.children || node.children.length === 0) && (
-            <span className="ml-1 text-[10px] text-comment opacity-50 select-none shrink-0">(empty)</span>
           )}
         </div>
         {node.data.type === "folder" && (
@@ -857,7 +855,7 @@ function removeNodeByPath(nodes: ExtendedFileTree[], targetPath: string): Extend
 }
 
 export const FileSystemList = () => {
-  const { data, isPending, isFetching } = useFileTree();
+  const { data, isPending, isFetching, dataUpdatedAt } = useFileTree();
   usePrefetchFileList();
   const { data: appState } = useGetAppState();
 
@@ -866,9 +864,14 @@ export const FileSystemList = () => {
   useElectronEvent("file:delete-start", () => {
     setShowDeleteProgress(true);
   });
+  useElectronEvent("file:delete-complete", () => {
+    setShowDeleteProgress(false);
+  });
+  useElectronEvent("file:bulk-delete-complete", () => {
+    setShowDeleteProgress(false);
+  });
   useElectronEvent<{ path: string }>("file:delete", (eventData) => {
     if (!eventData?.path) return;
-    // Surgically remove the node — loading stays on until the tree refetch completes
     setTreeData((prev) => removeNodeByPath(prev, eventData.path));
     queryClient.invalidateQueries({ queryKey: ["panel:tabs"] });
     queryClient.invalidateQueries({ queryKey: ["app:state"] });
@@ -876,15 +879,13 @@ export const FileSystemList = () => {
 
   useElectronEvent<{ path: string }>("directory:delete", (eventData) => {
     if (!eventData?.path) return;
-    // Surgically remove the node — loading stays on until the tree refetch completes
     setTreeData((prev) => removeNodeByPath(prev, eventData.path));
     expandedDirsRef.current.delete(eventData.path);
     queryClient.invalidateQueries({ queryKey: ["panel:tabs"] });
     queryClient.invalidateQueries({ queryKey: ["app:state"] });
   });
   useEffect(() => {
-    // Clear the delete progress bar only after the tree finishes refetching,
-    // so it stays visible while the server catches up on large projects.
+    // Fallback: also clear if the tree finishes a refetch (e.g. single-file delete via context menu).
     if (!isFetching) setShowDeleteProgress(false);
   }, [isFetching]);
 
@@ -960,23 +961,23 @@ export const FileSystemList = () => {
         });
         if (wasOpen) {
           expandedDirsRef.current.add(dirPath);
-          // Re-open the folder and any previously-expanded siblings after render
+          // Re-open the folder and any previously-expanded siblings after render.
+          // Skip lazy nodes — they need children fetched before opening; the caller
+          // is responsible for those (e.g. rename mutation calls expandLazyNode).
           setTimeout(() => {
             treeRef.current?.get(dirPath)?.open();
-            // Re-open expanded siblings whose open state was reset by the tree update
             for (const expandedPath of expandedDirsRef.current) {
               if (expandedPath === dirPath) continue;
               const node = treeRef.current?.get(expandedPath);
-              if (node && !node.isOpen) node.open();
+              if (node && !node.isOpen && !node.data.lazy) node.open();
             }
           }, 0);
         } else {
           expandedDirsRef.current.delete(dirPath);
-          // Still re-open any other expanded dirs that may have been reset
           setTimeout(() => {
             for (const expandedPath of expandedDirsRef.current) {
               const node = treeRef.current?.get(expandedPath);
-              if (node && !node.isOpen) node.open();
+              if (node && !node.isOpen && !node.data.lazy) node.open();
             }
           }, 0);
         }
@@ -987,92 +988,60 @@ export const FileSystemList = () => {
   }, []);
 
   const expandAllRecursive = useCallback(async (startPath: string) => {
-    const ipcExpandDir = (window.electron as any)?.files?.expandDir as ((dirPath: string) => Promise<ExtendedFileTree[]>) | undefined;
-    if (!ipcExpandDir) return;
+    const ipcExpandDirAll = (window.electron as any)?.files?.expandDirAll as
+      | ((dirPath: string) => Promise<Record<string, ExtendedFileTree[]>>)
+      | undefined;
+    if (!ipcExpandDirAll) return;
 
     setIsTreeBusy(true);
+    const frame = () => new Promise<void>((resolve) => requestAnimationFrame(resolve));
 
-    // BFS with parallel fetching per level.
-    // Hard caps match VS Code's approach — prevents UI freeze on large repos.
-    const MAX_DIRS = 500;
-    const MAX_DEPTH = 6;
+    // Phase 1 — one IPC call gets the entire subtree at once.
+    // Previously this was N calls (one per directory), causing N round-trips
+    // and N separate IPC-triggered refreshes. Now it's a single round-trip.
+    const allChildren = await ipcExpandDirAll(startPath);
 
-    const toExpand: { dirPath: string; children: ExtendedFileTree[] }[] = [];
-    let totalDirs = 0;
-    let capped = false;
+    if (!allChildren || Object.keys(allChildren).length === 0) {
+      setIsTreeBusy(false);
+      return;
+    }
 
-    // Each BFS level: array of { dirPath, depth }
-    let currentLevel: { dirPath: string; depth: number }[] = [{ dirPath: startPath, depth: 0 }];
-
-    while (currentLevel.length > 0 && !capped) {
-      // Fetch all dirs in this level in parallel
-      const results = await Promise.all(
-        currentLevel.map(async ({ dirPath, depth }) => {
-          const node = treeRef.current?.get(dirPath);
-          let childrenData: ExtendedFileTree[];
-
-          if (!node || node.data.lazy) {
-            try {
-              const fetched = await ipcExpandDir(dirPath);
-              if (!fetched) return { dirPath, childrenData: [], depth };
-              childrenData = fetched as ExtendedFileTree[];
-              expandedDirsRef.current.add(dirPath);
-              toExpand.push({ dirPath, children: childrenData });
-            } catch {
-              return { dirPath, childrenData: [], depth };
-            }
-          } else {
-            childrenData = node.children?.map((c) => c.data) ?? [];
-          }
-
-          return { dirPath, childrenData, depth };
-        })
-      );
-
-      // Collect next level
-      const nextLevel: { dirPath: string; depth: number }[] = [];
-      for (const { childrenData, depth } of results) {
-        if (capped) break;
-        for (const child of childrenData) {
-          if (child.type === "folder") {
-            totalDirs++;
-            if (totalDirs >= MAX_DIRS || depth + 1 >= MAX_DEPTH) {
-              capped = true;
-              break;
-            }
-            nextLevel.push({ dirPath: child.path, depth: depth + 1 });
-          }
+    // Rebuild BFS level order from the returned flat map so we can inject
+    // and open parents before children (injectChildren requires parent first).
+    const leveledPaths: string[][] = [];
+    let currentLevel = [startPath];
+    while (currentLevel.length > 0) {
+      leveledPaths.push([...currentLevel]);
+      const nextLevel: string[] = [];
+      for (const dirPath of currentLevel) {
+        for (const child of allChildren[dirPath] ?? []) {
+          if (child.type === "folder") nextLevel.push(child.path);
         }
       }
-
       currentLevel = nextLevel;
     }
 
-    if (toExpand.length > 0) {
-      setTreeData((prev) => {
-        let updated = prev;
-        for (const { dirPath, children } of toExpand) {
-          updated = injectChildren(updated, dirPath, children);
+    // Phase 2 — inject all data in one setTreeData call (one React render).
+    setTreeData((prev) => {
+      let updated = prev;
+      for (const levelPaths of leveledPaths) {
+        for (const dirPath of levelPaths) {
+          const children = allChildren[dirPath];
+          if (children) updated = injectChildren(updated, dirPath, children);
         }
-        return updated;
-      });
-    }
+      }
+      return updated;
+    });
+    await frame();
 
-
-    // Collect all folder nodes to open, then open in batches of 20 per frame
-    // so the browser stays responsive on large trees.
-    const toOpen: any[] = [];
-    const collectOpen = (n: any) => {
-      if (!n || n.data.type !== "folder") return;
-      toOpen.push(n);
-      n.children?.forEach(collectOpen);
-    };
-    collectOpen(treeRef.current?.get(startPath));
-
-    const BATCH = 20;
-    for (let i = 0; i < toOpen.length; i += BATCH) {
-      toOpen.slice(i, i + BATCH).forEach((n) => n.open());
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    // Phase 3 — open level by level. react-arborist.get() is visibility-limited
+    // so we must open parents before children can be found.
+    for (const levelPaths of leveledPaths) {
+      for (const dirPath of levelPaths) {
+        expandedDirsRef.current.add(dirPath);
+        treeRef.current?.get(dirPath)?.open();
+      }
+      await frame();
     }
 
     setIsTreeBusy(false);
@@ -1270,6 +1239,12 @@ export const FileSystemList = () => {
       isFirstLoadRef.current = false;
       setTreeData([data as ExtendedFileTree]);
 
+      // Track root so refreshDir's re-open loop can restore it if react-arborist
+      // resets its open state when treeData changes.
+      if ((data as ExtendedFileTree).type === "folder") {
+        expandedDirsRef.current.add((data as ExtendedFileTree).path);
+      }
+
       const dirsToReExpand = [...expandedDirsRef.current];
       if (dirsToReExpand.length === 0) return;
 
@@ -1339,12 +1314,52 @@ export const FileSystemList = () => {
         return { ...incoming, children: mergedChildren };
       });
     });
-  }, [data]);
+
+    // Re-fetch all expanded dirs so changes in deep folders are reflected.
+    // dataUpdatedAt (not data) drives this — React Query's structural sharing
+    // keeps the data reference the same when only deep children changed, but
+    // dataUpdatedAt always increments on every successful refetch.
+    const dirsToRefresh = [...expandedDirsRef.current];
+    if (dirsToRefresh.length > 0) {
+      const electronFiles = window.electron?.files;
+      if (electronFiles) {
+        (async () => {
+          const results: { dirPath: string; children: ExtendedFileTree[] }[] = [];
+          await Promise.all(
+            dirsToRefresh.map(async (dirPath) => {
+              try {
+                const children = await (electronFiles as any).expandDir(dirPath);
+                if (children) results.push({ dirPath, children: children as ExtendedFileTree[] });
+              } catch {
+                expandedDirsRef.current.delete(dirPath);
+              }
+            }),
+          );
+          if (results.length === 0) return;
+          setTreeData((prev) => {
+            let updated = prev;
+            for (const { dirPath, children } of results) {
+              updated = injectChildren(updated, dirPath, children);
+            }
+            return updated;
+          });
+          setTimeout(() => {
+            for (const { dirPath } of results) {
+              const node = treeRef.current?.get(dirPath);
+              if (node && !node.isOpen) node.open();
+            }
+          }, 0);
+        })();
+      }
+    }
+
+  }, [data, dataUpdatedAt]);
 
   // Reset the first-load guard whenever the active project changes so that
   // switching projects re-initialises the tree correctly.
   useEffect(() => {
     isFirstLoadRef.current = true;
+    expandedDirsRef.current.clear();
   }, [appState?.activeDirectory]);
 
   const tryStartDuplicateRename = useCallback((path: string) => {
@@ -1373,10 +1388,16 @@ export const FileSystemList = () => {
   useElectronEvent<{ path: string }>("file:new", (eventData) => {
     const newPath = eventData?.path;
     if (!newPath) return;
-    const parentPath = getParentPath(newPath);
-    if (parentPath) {
-      refreshDir(parentPath);
+    // Walk up from the immediate parent until we find an ancestor already
+    // rendered in the tree. Needed when a deep path (e.g. from OpenAPI import)
+    // is created before its intermediate directories exist in the tree.
+    let target = getParentPath(newPath);
+    while (target && !treeRef.current?.get(target)) {
+      const parent = getParentPath(target);
+      if (!parent || parent === target) { target = ''; break; }
+      target = parent;
     }
+    if (target) refreshDir(target);
   });
 
   useElectronEvent<{ path: string }>("file:duplicate", (eventData) => {
