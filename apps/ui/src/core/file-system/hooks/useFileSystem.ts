@@ -145,6 +145,7 @@ export const useFileTree = () => {
   return useQuery({
     queryKey: ["files:tree", activeDirectory],
     enabled: !!activeDirectory,
+    refetchInterval: false,
     gcTime: 0,
     queryFn: async (): Promise<FileTree | undefined> => {
       if (!activeDirectory) return undefined;
@@ -166,6 +167,7 @@ export const usePrefetchFileList = () => {
     queryKey: ["files:flatList", activeDirectory],
     enabled: !!activeDirectory,
     staleTime: Infinity,
+    refetchInterval: false,
     gcTime: 0,
     queryFn: async (): Promise<{ name: string; path: string }[]> => {
       if (!activeDirectory) return [];

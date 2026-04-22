@@ -7,6 +7,7 @@ import { globalSaveFile, saveTabById } from "@/core/file-system/hooks";
 import { reloadVoidenEditor, useEditorStore } from "@/core/editors/voiden/VoidenEditor";
 import { useLoadEnv, useSetActiveEnv } from "@/core/environment/hooks";
 import { toast } from "@/core/components/ui/sonner";
+import { useFocusStore } from "@/core/stores/focusStore";
 
 // Define the shape of our context.
 interface ElectronEventContextType {
@@ -153,7 +154,11 @@ export const ElectronEventProvider: React.FC<{ children: React.ReactNode }> = ({
         // Debounce: git:changed fires repeatedly during checkout/clone
         if (gitChangedDebounceRef.current) clearTimeout(gitChangedDebounceRef.current);
         gitChangedDebounceRef.current = setTimeout(() => {
-          queryClient.invalidateQueries({ queryKey: ["files:tree"] });
+          // Skip tree invalidation while a rename/create input is open — it
+          // would cause the tree to re-render and disrupt the in-progress input.
+          if (!useFocusStore.getState().isRenaming) {
+            queryClient.invalidateQueries({ queryKey: ["files:tree"] });
+          }
           queryClient.invalidateQueries({ queryKey: ["git:branches"] });
           queryClient.invalidateQueries({ queryKey: ["git:status"] });
           queryClient.invalidateQueries({ queryKey: ["git:log"] });
