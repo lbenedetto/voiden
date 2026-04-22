@@ -146,7 +146,7 @@ const TreeActionsContext = React.createContext<{
 function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode, onFolderToggle, refreshDir, expandedDirsRef, treeRef }: TreeNodeProps) {
   const [error, setError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [dragOverTimer, setDragOverTimer] = useState<NodeJS.Timeout | null>(null);
+  const dragOverTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
   const { dragOverParentId, setDragOverParentId } = useContext(DragOverContext);
   const { expandAllRecursive } = useContext(TreeActionsContext);
@@ -163,21 +163,22 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode, on
     if (!isInternalDropTargetFolder) return;
     setIsDragOver(true);
     setDragOverParentId(null);
-    if (!node.isOpen && !dragOverTimer) {
-      const timer = setTimeout(() => {
-        node.open();
-      }, 200);
-      setDragOverTimer(timer);
+    if (!node.isOpen && !dragOverTimerRef.current) {
+      dragOverTimerRef.current = setTimeout(() => {
+        dragOverTimerRef.current = null;
+        if (!node.isOpen) onFolderToggle(node);
+      }, 800);
     }
-  }, [isInternalDropTargetFolder, node, dragOverTimer, setDragOverParentId]);
+  }, [isInternalDropTargetFolder, node, setDragOverParentId, onFolderToggle]);
 
   useEffect(() => {
     return () => {
-      if (dragOverTimer) {
-        clearTimeout(dragOverTimer);
+      if (dragOverTimerRef.current) {
+        clearTimeout(dragOverTimerRef.current);
+        dragOverTimerRef.current = null;
       }
     };
-  }, [dragOverTimer]);
+  }, []);
 
   const getGitStatusClass = (gitStatus: any) => {
     if (!gitStatus) return "";
@@ -411,9 +412,9 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode, on
   const handleDrop = async (e: React.DragEvent) => {
     setIsDragOver(false);
     setDragOverParentId(null);
-    if (dragOverTimer) {
-      clearTimeout(dragOverTimer);
-      setDragOverTimer(null);
+    if (dragOverTimerRef.current) {
+      clearTimeout(dragOverTimerRef.current);
+      dragOverTimerRef.current = null;
     }
 
     if (!isExternalFileDrag(e)) {
@@ -490,11 +491,11 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode, on
       setIsDragOver(true);
       setDragOverParentId(null);
 
-      if (!node.isOpen && !dragOverTimer) {
-        const timer = setTimeout(() => {
-          node.open();
-        }, 200);
-        setDragOverTimer(timer);
+      if (!node.isOpen && !dragOverTimerRef.current) {
+        dragOverTimerRef.current = setTimeout(() => {
+          dragOverTimerRef.current = null;
+          if (!node.isOpen) onFolderToggle(node);
+        }, 800);
       }
       return;
     }
@@ -513,11 +514,11 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode, on
 
     setDragOverParentId(parentId);
 
-    if (node.data.type === "folder" && !node.isOpen && !dragOverTimer) {
-      const timer = setTimeout(() => {
-        node.open();
-      }, 200);
-      setDragOverTimer(timer);
+    if (node.data.type === "folder" && !node.isOpen && !dragOverTimerRef.current) {
+      dragOverTimerRef.current = setTimeout(() => {
+        dragOverTimerRef.current = null;
+        if (!node.isOpen) onFolderToggle(node);
+      }, 800);
     } else if (node.data.type === "folder") {
       const closeAllDescendants = (parentNode: typeof node) => {
         if (!parentNode.children) return;
@@ -550,9 +551,9 @@ function TreeNode({ node, style, dragHandle, activeFile, removeTemporaryNode, on
       setIsDragOver(false);
       setDragOverParentId(null);
 
-      if (dragOverTimer) {
-        clearTimeout(dragOverTimer);
-        setDragOverTimer(null);
+      if (dragOverTimerRef.current) {
+        clearTimeout(dragOverTimerRef.current);
+        dragOverTimerRef.current = null;
       }
     }
   };
