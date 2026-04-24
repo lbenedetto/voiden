@@ -46,6 +46,7 @@ import { useElectronEvent } from "@/core/providers";
 import { useFocusStore } from "@/core/stores/focusStore";
 import { useSearchStore } from "@/core/stores/searchStore";
 import { useSearchStore as useEditorSearchStore } from "@/core/stores/searchParamsStore";
+import { useShallow } from "zustand/react/shallow";
 import { useBlockContentStore } from "@/core/stores/blockContentStore";
 import { SearchPanelView } from "@/core/editors/code/lib/components/SearchPanelView";
 import { useSetActiveProject } from "@/core/projects/hooks";
@@ -1177,8 +1178,10 @@ export const FileSystemList = () => {
   }, [rawQuery]);
 
   const { closeBottomPanel } = usePanelStore();
-  const storeIsSearching = useSearchStore((state) => state.isSearching);
-  const openSearchTick = useSearchStore((state) => state.openTick);
+  const { storeIsSearching, openSearchTick } = useSearchStore(useShallow((state) => ({
+    storeIsSearching: state.isSearching,
+    openSearchTick: state.openTick,
+  })));
   const setStoreIsSearching = useSearchStore((state) => state.setIsSearching);
   const findInputRef = useRef<HTMLTextAreaElement>(null);
 

@@ -26,6 +26,7 @@ import { CodeNodeViewRendererProps } from "./TiptapCodeEditorWrapper.tsx";
 import { voidenTheme } from "@/core/editors/code/CodeEditor.tsx";
 import { globalSaveFile } from "@/core/file-system/hooks";
 import { useSearchStore } from "@/core/stores/searchParamsStore";
+import { useShallow } from "zustand/react/shallow";
 import { useEditorEnhancementStore } from "@/plugins";
 import { unifiedSearchField } from "@/core/editors/voiden/search/cmHighlightEffect";
 import { useEnvironments } from "@/core/environment/hooks";
@@ -222,12 +223,13 @@ export const CodeEditor = ({
   }
 
   const noGlobalSearch = useContext(NoGlobalSearchContext);
-  const searchTerm = useSearchStore((s) => s.term);
-  const matchCase = useSearchStore((s) => s.matchCase);
-  const matchWholeWord = useSearchStore((s) => s.matchWholeWord);
-  const useRegex = useSearchStore((s) => s.useRegex);
-  const isUnifiedSearchActive = useSearchStore((s) => s.isUnifiedSearchActive);
-  const openPanelTick = useSearchStore((s) => s.openPanelTick);
+  const { searchTerm, matchCase, matchWholeWord, useRegex, openPanelTick } = useSearchStore(useShallow((s) => ({
+    searchTerm: s.term,
+    matchCase: s.matchCase,
+    matchWholeWord: s.matchWholeWord,
+    useRegex: s.useRegex,
+    openPanelTick: s.openPanelTick,
+  })));
   const handledOpenTickRef = useRef(0);
 
   useEffect(() => {

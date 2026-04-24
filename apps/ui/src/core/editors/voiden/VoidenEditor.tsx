@@ -1,100 +1,21 @@
 import { useCallback, useMemo, useState, useEffect, useRef, useLayoutEffect, memo } from "react";
-import { AnyExtension, Editor, EditorContent, Extension, getSchema, useEditor } from "@tiptap/react";
-import { Plugin, PluginKey, TextSelection } from "prosemirror-state";
-import { Decoration, DecorationSet } from "prosemirror-view";
+import { AnyExtension, Editor, EditorContent, Extension, JSONContent, getSchema, useEditor } from "@tiptap/react";
+import { TextSelection } from "prosemirror-state";
+import type { Node as ProseMirrorNode } from "prosemirror-model";
 import { useVoidVariableData } from "@/core/runtimeVariables/hook/useVariableCapture.tsx";
 import {
   buildUnifiedMatches,
   extractTextFromJson,
-  escapeRegExp,
   getPmMatches,
   getCmMatchesByNode,
   type UnifiedMatch,
   type LinkedChunk,
 } from "@/core/editors/voiden/search/unifiedSearch";
+import { FindHighlightExtension, findHighlightPluginKey } from "@/core/editors/voiden/search/findHighlight";
 import { useBlockContentStore } from "@/core/stores/blockContentStore";
 import { unifiedSearchHighlight } from "@/core/editors/voiden/search/cmHighlightEffect";
 import { findCmViewAtPos, findAllCmViews } from "@/core/editors/voiden/search/cmViewLookup";
 import { SectionIndicatorExtension } from "./extensions/sectionIndicator";
-// Plugin to highlight all findTerm matches, with special highlight for current match
-const findHighlightPluginKey = new PluginKey("findHighlight");
-const findHighlightPlugin = new Plugin({
-  key: findHighlightPluginKey,
-  state: {
-    init() {
-      return DecorationSet.empty;
-    },
-    apply(tr, old, _oldState, newState) {
-      const meta = tr.getMeta(findHighlightPluginKey);
-      if (!meta || typeof meta !== "object") {
-        return old.map(tr.mapping, newState.doc);
-      }
-      // Accept currentMatch in meta, default to -1 if not present
-      const { term, matchCase, matchWholeWord, useRegex, currentMatch = -1 } = meta;
-      if (!term) {
-        return DecorationSet.empty;
-      }
-      // Build regex for finding all matches
-      const rawPattern = useRegex ? term : escapeRegExp(term);
-      const flags = matchCase ? "g" : "gi";
-      let regex: RegExp;
-      try {
-        regex = new RegExp(rawPattern, flags);
-      } catch {
-        return DecorationSet.empty;
-      }
-      const decorations: Decoration[] = [];
-      let matchIndex = 0;
-      // Scan each text node for matches
-      newState.doc.descendants((node, pos) => {
-        if (node.isText && node.text) {
-          let m: RegExpExecArray | null;
-          while ((m = regex.exec(node.text)) !== null) {
-            const start = pos + m.index;
-            const end = start + m[0].length;
-            let valid = true;
-            if (matchWholeWord) {
-              // Check left boundary
-              const before = start > 0 ? newState.doc.textBetween(start - 1, start) : "";
-              const after = end < newState.doc.content.size ? newState.doc.textBetween(end, end + 1) : "";
-              const wordChar = /\w/;
-              if ((before && wordChar.test(before)) || (after && wordChar.test(after))) {
-                valid = false;
-              }
-            }
-            if (valid) {
-              const isCur = matchIndex === currentMatch;
-              decorations.push(
-                Decoration.inline(start, end, {
-                  style: isCur ? "background-color: rgba(255, 165, 0, 0.7);" : "background-color: rgba(255, 255, 0, 0.4);",
-                  ...(isCur ? { class: "find-current-match" } : {}),
-                }),
-              );
-              matchIndex++;
-            }
-            if (m.index === regex.lastIndex) regex.lastIndex++;
-          }
-        }
-        return true;
-      });
-      return DecorationSet.create(newState.doc, decorations);
-    },
-  },
-  props: {
-    decorations(state) {
-      return this.getState(state);
-    },
-  },
-});
-
-// Tiptap extension that adds our highlight plugin
-export const FindHighlightExtension = Extension.create({
-  name: "findHighlight",
-  addProseMirrorPlugins() {
-    return [findHighlightPlugin];
-  },
-});
-export { findHighlightPluginKey };
 import { voidenExtensions } from "./extensions";
 import { preserveUnknownNodesInJSON, DocumentPreserver } from "./extensions/DocumentPreserver";
 import { create } from "zustand";
@@ -110,6 +31,7 @@ import { useContentStore } from "@/core/stores/ContentStore";
 import { saveFileUtil } from "@/core/file-system/hooks";
 import { variableHighlighter, updateVariableData, updateVariableKeys } from "./extensions/variableHighlighter";
 import { useSearchStore, type SearchCallbacks } from "@/core/stores/searchParamsStore";
+import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/core/stores/panelStore";
 import { useGetActiveDocument } from "@/core/documents/hooks";
 import { useVoidVariables } from "@/core/runtimeVariables/hook/useVariableCapture";
@@ -401,20 +323,23 @@ const VoidenEditorInner = ({
   }, [content, isActive]);
 
   // Find & Replace state — shared fields live in the store so all editor types stay in sync
-  const showFind = useSearchStore((s) => s.isOpen);
+  const { showFind, findTerm, replaceTerm, matchCase, matchWholeWord, useRegex, openPanelTick } = useSearchStore(useShallow((s) => ({
+    showFind: s.isOpen,
+    findTerm: s.term,
+    replaceTerm: s.replaceTerm,
+    matchCase: s.matchCase,
+    matchWholeWord: s.matchWholeWord,
+    useRegex: s.useRegex,
+    openPanelTick: s.openPanelTick,
+  })));
   const setShowFind = useSearchStore((s) => s.setIsOpen);
-  const findTerm = useSearchStore((s) => s.term);
   const setFindTerm = useSearchStore((s) => s.setTerm);
-  const replaceTerm = useSearchStore((s) => s.replaceTerm);
   const setReplaceTerm = useSearchStore((s) => s.setReplaceTerm);
-  const matchCase = useSearchStore((s) => s.matchCase);
-  const matchWholeWord = useSearchStore((s) => s.matchWholeWord);
-  const useRegex = useSearchStore((s) => s.useRegex);
   const setUseMultiline = useSearchStore((s) => s.setUseMultiline);
   const setShowReplaceSection = useSearchStore((s) => s.setShowReplace);
+  const setUnifiedSearchActive = useSearchStore((s) => s.setUnifiedSearchActive);
   const [matchPositions, setMatchPositions] = useState<UnifiedMatch[]>([]);
   const [currentMatch, setCurrentMatch] = useState(-1);
-  const setUnifiedSearchActive = useSearchStore((state) => state.setUnifiedSearchActive);
 
   // Auto-enable multiline when a literal newline is pasted/entered.
   useEffect(() => {
@@ -423,7 +348,6 @@ const VoidenEditorInner = ({
 
   // Open the find panel in response to an external request (e.g. clicking a
   // file-system search result). Store already has the correct term/options.
-  const openPanelTick = useSearchStore((s) => s.openPanelTick);
   const handledOpenTickRef = useRef(useSearchStore.getState().openPanelTick);
   useEffect(() => {
     if (openPanelTick === handledOpenTickRef.current) return;
@@ -1023,21 +947,19 @@ const VoidenEditorInner = ({
 
   const queryClient = useQueryClient();
 
-  const linkedContentResolver = useCallback((node: import("prosemirror-model").Node): LinkedChunk[] | null => {
+  const linkedContentResolver = useCallback((node: ProseMirrorNode): LinkedChunk[] | null => {
     if (node.type.name === "linkedBlock") {
       const block = useBlockContentStore.getState().getBlock(node.attrs.blockUid);
       if (!block) return null;
       return [{ text: extractTextFromJson(block), blockUid: node.attrs.blockUid }];
     }
     if (node.type.name === "linkedFile") {
-      const cached = queryClient.getQueryData<import("@tiptap/core").JSONContent[]>([
+      const cached = queryClient.getQueryData<JSONContent[]>([
         "voiden-wrapper:linkedFileContent",
         node.attrs.originalFile,
         node.attrs.sectionUid ?? null,
       ]);
       if (!cached) return null;
-      // Emit separate chunks: file-own-text (no blockUid) and nested block text (with blockUid).
-      // This lets the highlight system know exactly which sub-element a match belongs to.
       const chunks: LinkedChunk[] = [];
       const collectChunks = (n: unknown) => {
         if (!n || typeof n !== "object") return;
@@ -1048,15 +970,9 @@ const VoidenEditorInner = ({
             const block = useBlockContentStore.getState().getBlock(uid);
             if (block) chunks.push({ text: extractTextFromJson(block), blockUid: uid });
           }
-          return; // Don't recurse into linkedBlock's JSON children
+          return;
         }
-        let text = "";
-        if (typeof obj.text === "string") text += obj.text;
-        if (typeof obj.attrs === "object" && obj.attrs !== null) {
-          const attrs = obj.attrs as Record<string, unknown>;
-          if (typeof attrs.body === "string") text += "\n" + attrs.body;
-          if (typeof attrs.title === "string") text += " " + attrs.title;
-        }
+        const text = extractTextFromJson({ ...obj, content: undefined });
         if (text) chunks.push({ text });
         if (Array.isArray(obj.content)) {
           for (const child of obj.content) collectChunks(child);
@@ -1376,13 +1292,29 @@ const VoidenEditorInner = ({
       } else if (source.type === "linked") {
         const domNode = editor.view.nodeDOM(source.pmNodePos) as HTMLElement | null;
         if (domNode) {
-          // Defer to let React re-render the preview editor with the new
-          // currentMatch highlight, then scroll to the precise highlight span.
-          // Fall back to the container if the span isn't found yet.
-          requestAnimationFrame(() => requestAnimationFrame(() => {
-            const highlight = domNode.querySelector<HTMLElement>(".find-current-match");
-            scrollMatchIntoView(highlight ?? domNode);
-          }));
+          const scrollToHighlight = (el: HTMLElement) => {
+            if (!scrollContainerEl) {
+              el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+              return;
+            }
+            const containerRect = scrollContainerEl.getBoundingClientRect();
+            const nodeRect = el.getBoundingClientRect();
+            if (nodeRect.top >= containerRect.top && nodeRect.bottom <= containerRect.bottom) return;
+            scrollMatchIntoView(el);
+          };
+          const observer = new MutationObserver(() => {
+            const el = domNode.querySelector<HTMLElement>(".find-current-match");
+            if (el) {
+              observer.disconnect();
+              scrollToHighlight(el);
+            }
+          });
+          observer.observe(domNode, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style"] });
+          setTimeout(() => {
+            observer.disconnect();
+            const el = domNode.querySelector<HTMLElement>(".find-current-match");
+            scrollToHighlight(el ?? domNode);
+          }, 200);
         }
       }
     }
@@ -1398,13 +1330,13 @@ const VoidenEditorInner = ({
           return (m.source.blockUid ?? null) === blockUid;
         })
         .length;
-      console.debug("[search:linked] navigate", { matchIndex, pmNodePos: source.pmNodePos, blockUid, localIndex });
       useSearchStore.getState().setCurrentLinkedPmNodePos(source.pmNodePos);
       useSearchStore.getState().setCurrentLinkedBlockUid(blockUid);
       useSearchStore.getState().setCurrentLinkedLocalIndex(localIndex);
     } else {
       useSearchStore.getState().setCurrentLinkedPmNodePos(null);
       useSearchStore.getState().setCurrentLinkedBlockUid(null);
+      useSearchStore.getState().setCurrentLinkedLocalIndex(0);
     }
 
     // Update PM highlight to show current match

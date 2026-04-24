@@ -5,8 +5,10 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Link2, Play, Unlink } from "lucide-react";
 import { parseMarkdown } from "@/core/editors/voiden/markdownConverter";
-import { proseClasses, useVoidenExtensionsAndSchema, FindHighlightExtension, findHighlightPluginKey } from "@/core/editors/voiden/VoidenEditor";
+import { proseClasses, useVoidenExtensionsAndSchema } from "@/core/editors/voiden/VoidenEditor";
+import { FindHighlightExtension, findHighlightPluginKey } from "@/core/editors/voiden/search/findHighlight";
 import { useSearchStore } from "@/core/stores/searchParamsStore";
+import { useShallow } from "zustand/react/shallow";
 import { openFile } from "./ExternalFile";
 import { LinkedFilePmNodePosContext } from "./linkedFileContext";
 import { getBlocksForSection } from "@/core/editors/voiden/utils/expandLinkedBlocks";
@@ -16,16 +18,16 @@ import { useSendRestRequest } from "@/core/request-engine/hooks";
 // Read-only editor that renders an entire file's worth of blocks.
 function FilePreviewEditor({ blocks, pmNodePos }: { blocks: JSONContent[]; pmNodePos?: number }) {
   const { finalExtensions } = useVoidenExtensionsAndSchema();
-  const term = useSearchStore((s) => s.term);
-  const matchCase = useSearchStore((s) => s.matchCase);
-  const matchWholeWord = useSearchStore((s) => s.matchWholeWord);
-  const useRegex = useSearchStore((s) => s.useRegex);
-  const currentLinkedPmNodePos = useSearchStore((s) => s.currentLinkedPmNodePos);
-  const currentLinkedBlockUid = useSearchStore((s) => s.currentLinkedBlockUid);
-  const currentLinkedLocalIndex = useSearchStore((s) => s.currentLinkedLocalIndex);
-  // isCurrent only when match is in this file's own text (not a nested linked block)
+  const { term, matchCase, matchWholeWord, useRegex, currentLinkedPmNodePos, currentLinkedBlockUid, currentLinkedLocalIndex } = useSearchStore(useShallow((s) => ({
+    term: s.term,
+    matchCase: s.matchCase,
+    matchWholeWord: s.matchWholeWord,
+    useRegex: s.useRegex,
+    currentLinkedPmNodePos: s.currentLinkedPmNodePos,
+    currentLinkedBlockUid: s.currentLinkedBlockUid,
+    currentLinkedLocalIndex: s.currentLinkedLocalIndex,
+  })));
   const isCurrent = pmNodePos !== undefined && currentLinkedPmNodePos === pmNodePos && currentLinkedBlockUid === null;
-  console.debug("[FilePreviewEditor] isCurrent", { pmNodePos, currentLinkedPmNodePos, currentLinkedBlockUid, isCurrent });
 
   const previewExtensions = useMemo(
     () => [...finalExtensions.filter((ext) => ext?.name !== "seamlessNavigation"), FindHighlightExtension],

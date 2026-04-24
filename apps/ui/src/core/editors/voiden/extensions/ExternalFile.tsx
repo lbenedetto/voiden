@@ -10,8 +10,10 @@ import { ArrowRight, Plus, File, Folder, ChevronRight, Box, CheckSquare, Square 
 import { cn } from "@/core/lib/utils";
 import { getQueryClient } from "@/main";
 import { useGetApyFiles } from "@/core/documents/hooks";
-import { proseClasses, useVoidenExtensionsAndSchema, FindHighlightExtension, findHighlightPluginKey } from "@/core/editors/voiden/VoidenEditor";
+import { proseClasses, useVoidenExtensionsAndSchema } from "@/core/editors/voiden/VoidenEditor";
+import { FindHighlightExtension, findHighlightPluginKey } from "@/core/editors/voiden/search/findHighlight";
 import { useSearchStore } from "@/core/stores/searchParamsStore";
+import { useShallow } from "zustand/react/shallow";
 import { LinkedFilePmNodePosContext } from "./linkedFileContext";
 import { useBlockContentStore } from "@/core/stores/blockContentStore";
 import * as Tooltip from "@radix-ui/react-tooltip";
@@ -252,19 +254,19 @@ export async function computeAbsolutePath(nodeAttrs: FileLinkItem) {
 // (CodeMirror, contentEditable, etc.) from ever receiving focus.
 export function BlockPreviewEditor({ block, pmNodePos: ownPmNodePos, blockUid }: { block: JSONContent; pmNodePos?: number; blockUid?: string }) {
   const { finalExtensions } = useVoidenExtensionsAndSchema();
-  const term = useSearchStore((s) => s.term);
-  const matchCase = useSearchStore((s) => s.matchCase);
-  const matchWholeWord = useSearchStore((s) => s.matchWholeWord);
-  const useRegex = useSearchStore((s) => s.useRegex);
-  const currentLinkedPmNodePos = useSearchStore((s) => s.currentLinkedPmNodePos);
-  const currentLinkedBlockUid = useSearchStore((s) => s.currentLinkedBlockUid);
-  const currentLinkedLocalIndex = useSearchStore((s) => s.currentLinkedLocalIndex);
-  // If rendered inside a FilePreviewEditor, use the file node's pmNodePos for identity.
+  const { term, matchCase, matchWholeWord, useRegex, currentLinkedPmNodePos, currentLinkedBlockUid, currentLinkedLocalIndex } = useSearchStore(useShallow((s) => ({
+    term: s.term,
+    matchCase: s.matchCase,
+    matchWholeWord: s.matchWholeWord,
+    useRegex: s.useRegex,
+    currentLinkedPmNodePos: s.currentLinkedPmNodePos,
+    currentLinkedBlockUid: s.currentLinkedBlockUid,
+    currentLinkedLocalIndex: s.currentLinkedLocalIndex,
+  })));
   const parentFilePmNodePos = useContext(LinkedFilePmNodePosContext);
   const effectivePmNodePos = parentFilePmNodePos ?? ownPmNodePos;
   const isCurrent = effectivePmNodePos !== undefined && currentLinkedPmNodePos === effectivePmNodePos
     && (blockUid !== undefined ? currentLinkedBlockUid === blockUid : currentLinkedBlockUid === null);
-  console.debug("[BlockPreviewEditor] isCurrent", { ownPmNodePos, parentFilePmNodePos, blockUid, currentLinkedPmNodePos, currentLinkedBlockUid, isCurrent });
 
   const previewExtensions = useMemo(
     () => [...finalExtensions.filter(ext => ext?.name !== 'seamlessNavigation'), FindHighlightExtension],
