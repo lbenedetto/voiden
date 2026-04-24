@@ -5,11 +5,14 @@ import { Decoration, DecorationSet } from "prosemirror-view";
 import { useVoidVariableData } from "@/core/runtimeVariables/hook/useVariableCapture.tsx";
 import {
   buildUnifiedMatches,
+  extractTextFromJson,
   escapeRegExp,
   getPmMatches,
   getCmMatchesByNode,
   type UnifiedMatch,
+  type LinkedChunk,
 } from "@/core/editors/voiden/search/unifiedSearch";
+import { useBlockContentStore } from "@/core/stores/blockContentStore";
 import { unifiedSearchHighlight } from "@/core/editors/voiden/search/cmHighlightEffect";
 import { findCmViewAtPos, findAllCmViews } from "@/core/editors/voiden/search/cmViewLookup";
 import { SectionIndicatorExtension } from "./extensions/sectionIndicator";
@@ -60,9 +63,11 @@ const findHighlightPlugin = new Plugin({
               }
             }
             if (valid) {
+              const isCur = matchIndex === currentMatch;
               decorations.push(
                 Decoration.inline(start, end, {
-                  style: matchIndex === currentMatch ? "background-color: rgba(255, 165, 0, 0.7);" : "background-color: rgba(255, 255, 0, 0.4);",
+                  style: isCur ? "background-color: rgba(255, 165, 0, 0.7);" : "background-color: rgba(255, 255, 0, 0.4);",
+                  ...(isCur ? { class: "find-current-match" } : {}),
                 }),
               );
               matchIndex++;
@@ -83,12 +88,13 @@ const findHighlightPlugin = new Plugin({
 });
 
 // Tiptap extension that adds our highlight plugin
-const FindHighlightExtension = Extension.create({
+export const FindHighlightExtension = Extension.create({
   name: "findHighlight",
   addProseMirrorPlugins() {
     return [findHighlightPlugin];
   },
 });
+export { findHighlightPluginKey };
 import { voidenExtensions } from "./extensions";
 import { preserveUnknownNodesInJSON, DocumentPreserver } from "./extensions/DocumentPreserver";
 import { create } from "zustand";
@@ -1016,6 +1022,52 @@ const VoidenEditorInner = ({
   }, [isActive]);
 
   const queryClient = useQueryClient();
+
+  const linkedContentResolver = useCallback((node: import("prosemirror-model").Node): LinkedChunk[] | null => {
+    if (node.type.name === "linkedBlock") {
+      const block = useBlockContentStore.getState().getBlock(node.attrs.blockUid);
+      if (!block) return null;
+      return [{ text: extractTextFromJson(block), blockUid: node.attrs.blockUid }];
+    }
+    if (node.type.name === "linkedFile") {
+      const cached = queryClient.getQueryData<import("@tiptap/core").JSONContent[]>([
+        "voiden-wrapper:linkedFileContent",
+        node.attrs.originalFile,
+        node.attrs.sectionUid ?? null,
+      ]);
+      if (!cached) return null;
+      // Emit separate chunks: file-own-text (no blockUid) and nested block text (with blockUid).
+      // This lets the highlight system know exactly which sub-element a match belongs to.
+      const chunks: LinkedChunk[] = [];
+      const collectChunks = (n: unknown) => {
+        if (!n || typeof n !== "object") return;
+        const obj = n as Record<string, unknown>;
+        if (obj.type === "linkedBlock" && obj.attrs) {
+          const uid = (obj.attrs as Record<string, unknown>).blockUid as string | undefined;
+          if (uid) {
+            const block = useBlockContentStore.getState().getBlock(uid);
+            if (block) chunks.push({ text: extractTextFromJson(block), blockUid: uid });
+          }
+          return; // Don't recurse into linkedBlock's JSON children
+        }
+        let text = "";
+        if (typeof obj.text === "string") text += obj.text;
+        if (typeof obj.attrs === "object" && obj.attrs !== null) {
+          const attrs = obj.attrs as Record<string, unknown>;
+          if (typeof attrs.body === "string") text += "\n" + attrs.body;
+          if (typeof attrs.title === "string") text += " " + attrs.title;
+        }
+        if (text) chunks.push({ text });
+        if (Array.isArray(obj.content)) {
+          for (const child of obj.content) collectChunks(child);
+        }
+      };
+      for (const block of cached) collectChunks(block);
+      return chunks.length > 0 ? chunks : null;
+    }
+    return null;
+  }, [queryClient]);
+
   useEffect(() => {
     if (!editor || !isActive) return;
 
@@ -1225,25 +1277,25 @@ const VoidenEditorInner = ({
       return;
     }
 
+    // Build unified matches across PM text, CM code blocks, and linked nodes
+    const matches = buildUnifiedMatches(editor.state.doc, findTerm, {
+      matchCase,
+      matchWholeWord,
+      useRegex,
+    }, linkedContentResolver);
+
+    setMatchPositions(matches);
+    setCurrentMatch(-1);
+
     // Dispatch PM highlight plugin meta
     const tr = editor.state.tr.setMeta(findHighlightPluginKey, {
       term: findTerm,
       matchCase,
       matchWholeWord,
       useRegex,
-      currentMatch,
+      currentMatch: -1,
     });
     editor.view.dispatch(tr);
-
-    // Build unified matches across PM text and CM code blocks
-    const matches = buildUnifiedMatches(editor.state.doc, findTerm, {
-      matchCase,
-      matchWholeWord,
-      useRegex,
-    });
-
-    setMatchPositions(matches);
-    setCurrentMatch(-1);
 
     // Dispatch highlights to CM instances
     dispatchCmHighlights(matches, -1);
@@ -1310,7 +1362,7 @@ const VoidenEditorInner = ({
         const node = domInfo.node instanceof HTMLElement ? domInfo.node : domInfo.node.parentElement;
         if (node) scrollMatchIntoView(node);
         if (shouldFocus) editor.commands.focus();
-      } else {
+      } else if (source.type === "codemirror") {
         const cmView = findCmViewAtPos(editor.view, source.pmNodePos);
         if (cmView) {
           const domNode = editor.view.nodeDOM(source.pmNodePos) as HTMLElement | null;
@@ -1321,10 +1373,39 @@ const VoidenEditorInner = ({
             scrollIntoView: true,
           });
         }
+      } else if (source.type === "linked") {
+        const domNode = editor.view.nodeDOM(source.pmNodePos) as HTMLElement | null;
+        if (domNode) {
+          // Defer to let React re-render the preview editor with the new
+          // currentMatch highlight, then scroll to the precise highlight span.
+          // Fall back to the container if the span isn't found yet.
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            const highlight = domNode.querySelector<HTMLElement>(".find-current-match");
+            scrollMatchIntoView(highlight ?? domNode);
+          }));
+        }
       }
     }
 
     setCurrentMatch(matchIndex);
+    if (source.type === "linked") {
+      const blockUid = source.blockUid ?? null;
+      const localIndex = matchPositions
+        .slice(0, matchIndex)
+        .filter((m) => {
+          if (m.source.type !== "linked") return false;
+          if (m.source.pmNodePos !== source.pmNodePos) return false;
+          return (m.source.blockUid ?? null) === blockUid;
+        })
+        .length;
+      console.debug("[search:linked] navigate", { matchIndex, pmNodePos: source.pmNodePos, blockUid, localIndex });
+      useSearchStore.getState().setCurrentLinkedPmNodePos(source.pmNodePos);
+      useSearchStore.getState().setCurrentLinkedBlockUid(blockUid);
+      useSearchStore.getState().setCurrentLinkedLocalIndex(localIndex);
+    } else {
+      useSearchStore.getState().setCurrentLinkedPmNodePos(null);
+      useSearchStore.getState().setCurrentLinkedBlockUid(null);
+    }
 
     // Update PM highlight to show current match
     const pmMatches = getPmMatches(matchPositions);
@@ -1372,7 +1453,7 @@ const VoidenEditorInner = ({
     if (source.type === "prosemirror") {
       // PM replacement — goes through PM undo stack
       editor.commands.insertContentAt({ from: source.from, to: source.to }, replaceTerm);
-    } else {
+    } else if (source.type === "codemirror") {
       // CM replacement — all through PM transaction for undo support
       const node = editor.state.doc.nodeAt(source.pmNodePos);
       if (node && typeof node.attrs.body === "string") {
@@ -1386,13 +1467,14 @@ const VoidenEditorInner = ({
         editor.view.dispatch(tr);
       }
     }
+    // linked matches are read-only — skip replace
 
     // Recompute unified matches after replacement
     const newMatches = buildUnifiedMatches(editor.state.doc, findTerm, {
       matchCase,
       matchWholeWord,
       useRegex,
-    });
+    }, linkedContentResolver);
     setMatchPositions(newMatches);
 
     // Navigate to next match
@@ -1406,12 +1488,13 @@ const VoidenEditorInner = ({
     }
 
     // Refresh PM highlights
+    const nextCurrent = newMatches.length > 0 ? (replaceIndex >= newMatches.length ? 0 : replaceIndex) : -1;
     const tr2 = editor.state.tr.setMeta(findHighlightPluginKey, {
       term: findTerm,
       matchCase,
       matchWholeWord,
       useRegex,
-      currentMatch: newMatches.length > 0 ? (replaceIndex >= newMatches.length ? 0 : replaceIndex) : -1,
+      currentMatch: nextCurrent,
     });
     editor.view.dispatch(tr2);
   };
@@ -1454,7 +1537,7 @@ const VoidenEditorInner = ({
       matchCase,
       matchWholeWord,
       useRegex,
-    });
+    }, linkedContentResolver);
     setMatchPositions(newMatches);
     setCurrentMatch(-1);
 

@@ -23,6 +23,9 @@ interface SearchStore {
     statusTick: number
     callbacks: SearchCallbacks | null
     openPanelTick: number
+    currentLinkedPmNodePos: number | null
+    currentLinkedBlockUid: string | null
+    currentLinkedLocalIndex: number
     setTerm: (t: string) => void
     setReplaceTerm: (r: string) => void
     setMatchCase: (c: boolean) => void
@@ -37,6 +40,9 @@ interface SearchStore {
     unregisterSearchCallbacks: () => void
     requestOpenSearchPanel: () => void
     setIsOpen: (open: boolean) => void
+    setCurrentLinkedPmNodePos: (pos: number | null) => void
+    setCurrentLinkedBlockUid: (uid: string | null) => void
+    setCurrentLinkedLocalIndex: (i: number) => void
 }
 
 export const useSearchStore = create<SearchStore>(set => ({
@@ -53,6 +59,9 @@ export const useSearchStore = create<SearchStore>(set => ({
     statusTick: 0,
     callbacks: null,
     openPanelTick: 0,
+    currentLinkedPmNodePos: null,
+    currentLinkedBlockUid: null,
+    currentLinkedLocalIndex: 0,
     setTerm: term => set({ term }),
     setReplaceTerm: replaceTerm => set({ replaceTerm }),
     setMatchCase: matchCase => set({ matchCase }),
@@ -67,4 +76,7 @@ export const useSearchStore = create<SearchStore>(set => ({
     unregisterSearchCallbacks: () => set({ callbacks: null, status: '' }),
     requestOpenSearchPanel: () => set(s => ({ openPanelTick: s.openPanelTick + 1, isOpen: true })),
     setIsOpen: isOpen => set({ isOpen }),
+    setCurrentLinkedPmNodePos: currentLinkedPmNodePos => set({ currentLinkedPmNodePos }),
+    setCurrentLinkedBlockUid: currentLinkedBlockUid => set({ currentLinkedBlockUid }),
+    setCurrentLinkedLocalIndex: currentLinkedLocalIndex => set({ currentLinkedLocalIndex }),
 }))
