@@ -418,7 +418,7 @@ const VoidenEditorInner = ({
   // Open the find panel in response to an external request (e.g. clicking a
   // file-system search result). Store already has the correct term/options.
   const openPanelTick = useSearchStore((s) => s.openPanelTick);
-  const handledOpenTickRef = useRef(0);
+  const handledOpenTickRef = useRef(useSearchStore.getState().openPanelTick);
   useEffect(() => {
     if (openPanelTick === handledOpenTickRef.current) return;
     handledOpenTickRef.current = openPanelTick;

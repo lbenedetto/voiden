@@ -181,6 +181,11 @@ export function ResponsePanelContainer() {
     if (activeTabId) setActiveTabId(activeTabId);
   }, [activeTabId, setActiveTabId]);
 
+  useEffect(() => {
+    closeResponseFind();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTabId]);
+
   // Hydrate response panel from the tab content once on first open/load.
   // Guarded per-tab so switching tabs does not re-fetch/re-parse repeatedly.
   useEffect(() => {

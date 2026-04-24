@@ -131,7 +131,7 @@ export function SearchPanelView({
 
   return (
     <Tooltip.Provider delayDuration={300}>
-      <div ref={containerRef} className={cn("flex flex-col w-full border border-border rounded px-1 py-0.5", className)}>
+      <div ref={containerRef} className={cn("flex flex-col w-full border border-border rounded px-1", className)}>
         {/* Find row */}
         <div className="flex items-start gap-1 w-full">
           {onToggleReplaceSection && (
