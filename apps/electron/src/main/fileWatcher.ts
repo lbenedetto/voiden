@@ -1,7 +1,7 @@
 import chokidar from "chokidar";
 import path from "node:path";
 import eventBus from "./eventBus";
-import { invalidateGitCache } from "./git";
+import { invalidateGitCache, ensureVoidenGitignore } from "./git";
 import { clearTreeResultCache } from "./ipc/files";
 import { logger } from "./logger";
 
@@ -111,7 +111,12 @@ function startWatching(projectPath: string, watcherId: string) {
       logger.info("system", "FileWatcher: add", { filePath });
       if (isCloningActive(filePath)) return;
       if (isGitRelated(filePath)) emitGitChangedDebounced({ path: filePath });
-      else emit("file:new", { path: filePath, project: projectPath, watcherId });
+      else {
+        if (path.basename(filePath) === ".gitignore" && path.dirname(filePath) === projectPath) {
+          ensureVoidenGitignore(projectPath).catch(() => {});
+        }
+        emit("file:new", { path: filePath, project: projectPath, watcherId });
+      }
     })
     .on("addDir", (dirPath) => {
       logger.info("system", "FileWatcher: addDir", { dirPath });
