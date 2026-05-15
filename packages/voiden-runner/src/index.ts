@@ -26,8 +26,6 @@ import {
   STORE_DIR,
 } from './plugins/store.js'
 import {
-  loadSessionEnv,
-  saveSessionEnv,
   appendSessionResults,
   loadSessionResults,
   clearSession,
@@ -202,12 +200,29 @@ function renderReportEntries(entries: CliReportEntry[], verbose: boolean): void 
   }
 }
 
+function printKeyValue(label: string, obj: Record<string, string> | undefined) {
+  if (!obj || Object.keys(obj).length === 0) return
+  console.log(chalk.gray(`         ${label}:`))
+  for (const [k, v] of Object.entries(obj)) {
+    console.log(chalk.gray(`           ${chalk.dim(k + ':')} ${v}`))
+  }
+}
+
+function printBody(label: string, body: string | undefined) {
+  if (!body) return
+  console.log(chalk.gray(`         ${label}:`))
+  for (const line of body.split('\n')) {
+    console.log(chalk.gray(`           ${line}`))
+  }
+}
+
 function printRequestResult(
   result: RunResult,
   filePath: string,
   index: number,
   total: number,
-  showBody: boolean,
+  showReq: boolean,
+  showRes: boolean,
   verbose: boolean,
 ): void {
   const icon = result.success ? chalk.green('  ✓') : chalk.red('  ✗')
@@ -239,28 +254,42 @@ function printRequestResult(
 
   console.log(`${icon}  ${proto} ${method}${url}${statusPart}  ${time}${sizePart}`)
 
-  if (!result.success && result.error) {
-    console.log(chalk.red(`       ${result.error}`))
+  // ── Always show request details on failure (helps debug "fetch failed") ────
+  if (!result.success) {
+    if (result.error) console.log(chalk.red(`       ${result.error}`))
+    console.log(chalk.gray('       ↳ request sent:'))
+    console.log(chalk.gray(`           url:    ${result.url || '—'}`))
+    if (result.method) console.log(chalk.gray(`           method: ${result.method}`))
+    printKeyValue('headers', result.requestHeaders)
+    if (result.requestBody) printBody('body', result.requestBody)
   }
 
-  // ── Report entries (emitted by plugins via context.report.add()) ───────────
+  // ── Report entries (emitted by plugins) ───────────────────────────────────
   if (result.reportEntries && result.reportEntries.length > 0) {
     renderReportEntries(result.reportEntries, verbose)
   }
 
-  // ── Legacy assertion fields (kept for backwards compat) ───────────────────
+  // ── Legacy assertion fields ───────────────────────────────────────────────
   if (!result.reportEntries && (result.assertionsPassed !== undefined || result.assertionsFailed !== undefined)) {
     const p = result.assertionsPassed ?? 0
     const f = result.assertionsFailed ?? 0
     console.log(`       assertions: ${chalk.green(`${p} passed`)}${f > 0 ? chalk.red(` · ${f} failed`) : ''}`)
   }
 
-  // ── Response body ─────────────────────────────────────────────────────────
-  if (showBody && result.body) {
+  // ── --show-req ────────────────────────────────────────────────────────────
+  if (showReq && result.success) {
+    console.log(chalk.gray('       ↳ request:'))
+    console.log(chalk.gray(`           url:    ${result.url || '—'}`))
+    if (result.method) console.log(chalk.gray(`           method: ${result.method}`))
+    printKeyValue('headers', result.requestHeaders)
+    if (result.requestBody) printBody('body', result.requestBody)
+  }
+
+  // ── --show-res ────────────────────────────────────────────────────────────
+  if (showRes) {
     console.log(chalk.gray('       ↳ response:'))
-    for (const line of result.body.split('\n')) {
-      console.log(chalk.gray(`         ${line}`))
-    }
+    printKeyValue('headers', result.responseHeaders)
+    if (result.body) printBody('body', result.body)
   }
 }
 
@@ -332,23 +361,28 @@ program
     memo.push(val)
     return memo
   }, [])
-  .option('--show-body', 'Print full response body for each request')
+  .option('--show-req', 'Print sent request headers and body for each request')
+  .option('--show-res', 'Print response headers and body for each request')
   .option('--bail', 'Stop immediately on first failure and exit 1 (CI fast-fail)')
   .option('--stop-on-failure', 'Alias for --bail: stop on first failure, exit 1 (shell set -e friendly)')
   .option('--fail-on-error', 'Exit with code 1 if any request fails (runs all files first)')
-  .option('--no-scripts', 'Disable voiden-scripting plugin entirely — prevents pre/post script execution (recommended for CI/CD)')
-  .option('--no-cache-vars', 'Do not load/save runtime variables to ~/.voiden/.process.env.json')
   .option('--verbose', 'Print plugin and script logs')
   .option('--json', 'Output results as JSON (suppresses normal output — useful for CI pipelines)')
-  .option('--no-session', 'Do not load/save session environment or results')
+  .option('--no-session', 'Completely stateless run (do not load/save results or runtime variables)')
   .option('--output-json <file>', 'Write the full result object to a JSON file — pass to the next CLI, script, or tool')
   .option('--csv <path>', 'Export full report (request + response headers, bodies, assertions) to a CSV file')
+  .option('--mail', 'Send HTML report to address specified in VOIDEN_MAIL_TO env')
   .option('--mail-to <address>', 'Send HTML report to this email address')
   .option('--mail-from <address>', 'Sender address for the report email')
   .option('--mail-subject <subject>', 'Email subject line (default: auto-generated summary)')
+  .option('--smtp-host <host>', 'SMTP server host')
+  .option('--smtp-port <port>', 'SMTP server port')
+  .option('--smtp-secure', 'Use TLS for SMTP (true/false)')
+  .option('--smtp-user <user>', 'SMTP username')
+  .option('--smtp-pass <pass>', 'SMTP password')
   .action(async (paths: string[], opts) => {
     // Priority order (lowest → highest):
-    //   system env (process.env) → session env → --env file → --env-var overrides
+    //   system env (process.env) → --env file → --env-var overrides
     //
     // System env is the base so GitHub Actions secrets, GitLab CI variables,
     // and any CI/CD platform vars are automatically available as {{KEY}}
@@ -357,12 +391,7 @@ program
       Object.entries(process.env).filter(([, v]) => v !== undefined) as [string, string][]
     )
 
-    // 1. Load persisted session env first (overrides system env)
-    if (!opts.noSession) {
-      Object.assign(env, loadSessionEnv())
-    }
-
-    // 2. Load --env file (overrides session + system)
+    // 1. Load --env file (overrides system)
     if (opts.env) {
       const envPath = resolve(opts.env)
       if (!existsSync(envPath)) {
@@ -377,7 +406,7 @@ program
       }
     }
 
-    // 3. Individual --env-var overrides
+    // 2. Individual --env-var overrides
     if (opts.envVar && Array.isArray(opts.envVar)) {
       for (const pair of opts.envVar) {
         const eq = pair.indexOf('=')
@@ -405,18 +434,32 @@ program
     // --stop-on-failure is a CI-friendly alias for --bail
     const stopOnFailure: boolean = opts.bail || opts.stopOnFailure
 
-    // SMTP settings — read from loaded .env file or process environment
-    const smtpHost = env.VOIDEN_SMTP_HOST || process.env.VOIDEN_SMTP_HOST
-    const smtpPort = parseInt(env.VOIDEN_SMTP_PORT || process.env.VOIDEN_SMTP_PORT || '0') || undefined
-    const smtpSecure = (env.VOIDEN_SMTP_SECURE || process.env.VOIDEN_SMTP_SECURE) === 'true'
-    const smtpUser = env.VOIDEN_SMTP_USER || process.env.VOIDEN_SMTP_USER
-    const smtpPass = env.VOIDEN_SMTP_PASS || process.env.VOIDEN_SMTP_PASS
+    // Mail settings — read from CLI options or merged env
+    const mailTo = opts.mailTo || (opts.mail ? env.VOIDEN_MAIL_TO : undefined)
+    const mailFrom = opts.mailFrom || env.VOIDEN_MAIL_FROM
+    const mailSubject = opts.mailSubject || env.VOIDEN_MAIL_SUBJECT
+
+    // SMTP settings — read from CLI options or merged env
+    const smtpHost = opts.smtpHost || env.VOIDEN_SMTP_HOST || process.env.VOIDEN_SMTP_HOST
+    const smtpPort = parseInt(opts.smtpPort || env.VOIDEN_SMTP_PORT || process.env.VOIDEN_SMTP_PORT || '0') || undefined
+    const smtpSecure = opts.smtpSecure || (env.VOIDEN_SMTP_SECURE || process.env.VOIDEN_SMTP_SECURE) === 'true'
+    const smtpUser = opts.smtpUser || env.VOIDEN_SMTP_USER || process.env.VOIDEN_SMTP_USER
+    const smtpPass = opts.smtpPass || env.VOIDEN_SMTP_PASS || process.env.VOIDEN_SMTP_PASS
 
     // Validate mail options up-front so we fail fast before running requests
-    if (opts.mailTo && !smtpHost) {
-      console.error(chalk.red('  --mail-to requires SMTP configuration.'))
-      console.log(chalk.gray('  Please set VOIDEN_SMTP_HOST in your .env file or environment.'))
-      process.exit(1)
+    if (opts.mail || opts.mailTo) {
+      if (!mailTo) {
+        console.error(chalk.red('  ✗  Mail error: no recipient found. Please provide --mail-to or set VOIDEN_MAIL_TO.'))
+        process.exit(1)
+      }
+      if (!opts.csv) {
+        console.error(chalk.red('  ✗  Mail error: no CSV generated. Mail requires --csv flag.'))
+        process.exit(1)
+      }
+      if (!smtpHost) {
+        console.error(chalk.red('  ✗  Mail keys are missing. Please provide SMTP configuration (VOIDEN_SMTP_HOST).'))
+        process.exit(1)
+      }
     }
 
     const runStart = Date.now()
@@ -425,12 +468,12 @@ program
 
     // In-memory runtime variables — shared across all files in this run.
     // Captured from {{$res.xxx}} runtime-variable blocks after each request.
-    // Available as {{process.KEY}} in subsequent requests and via vd.variables.get().
+    // Available as {{process.KEY}} in subsequent requests and via voiden.variables.get().
     const runtimeVars: Record<string, any> = {}
 
     // Load persisted runtime variables if not disabled
     const VARS_PATH = join(STORE_DIR, '.process.env.json')
-    if (!opts.noCacheVars && existsSync(VARS_PATH)) {
+    if (!opts.noSession && existsSync(VARS_PATH)) {
       try {
         const data = JSON.parse(readFileSync(VARS_PATH, 'utf-8'))
         Object.assign(runtimeVars, data)
@@ -441,8 +484,7 @@ program
     }
 
     // Load plugins once for the entire session — not once per file.
-    const skipPlugins = opts.noScripts ? new Set(['voiden-scripting']) : new Set<string>()
-    const activePlugins = await loadEnabledPlugins(opts.verbose ?? false, skipPlugins)
+    const activePlugins = await loadEnabledPlugins(opts.verbose ?? false)
 
     // Collect results
     for (let i = 0; i < resolvedFiles.length; i++) {
@@ -450,7 +492,7 @@ program
       const stopSpinner = opts.json ? () => {} : startSpinner(`[${i + 1}/${resolvedFiles.length}]  ${basename(file)}`)
 
       try {
-        const { results } = await runVoidFile(file, { env, verbose: opts.verbose, skipPlugins, runtimeVars, activePlugins })
+        const { results } = await runVoidFile(file, { env, verbose: opts.verbose, runtimeVars, activePlugins })
         stopSpinner()
         for (const { result } of results) {
           if (!result.success) anyFailed = true
@@ -488,7 +530,7 @@ program
     const totalMs = Date.now() - runStart
 
     // Save runtime variables if not disabled
-    if (!opts.noCacheVars && Object.keys(runtimeVars).length > 0) {
+    if (!opts.noSession && Object.keys(runtimeVars).length > 0) {
       try {
         mkdirSync(STORE_DIR, { recursive: true })
         writeFileSync(VARS_PATH, JSON.stringify(runtimeVars, null, 2), 'utf-8')
@@ -504,38 +546,40 @@ program
       printRunHeader(resolvedFiles.length, activePlugins.length)
       for (let i = 0; i < allResults.length; i++) {
         const { file, result } = allResults[i]
-        printRequestResult(result, file, i + 1, allResults.length, opts.showBody ?? false, opts.verbose ?? false)
+        printRequestResult(result, file, i + 1, allResults.length, opts.showReq ?? false, opts.showRes ?? false, opts.verbose ?? false)
       }
       printRunSummary(allResults, totalMs)
     }
 
     // ── CSV export ────────────────────────────────────────────────────────────
+    let savedCsvPath: string | undefined
     if (opts.csv) {
       try {
-        const savedTo = exportToCsv(allResults, opts.csv)
-        console.log(chalk.green(`  ✓  CSV report saved to ${savedTo}`))
+        savedCsvPath = exportToCsv(allResults, opts.csv)
+        console.log(chalk.green(`  ✓  CSV report saved to ${savedCsvPath}`))
       } catch (err: any) {
         console.error(chalk.red(`  ✗  Failed to write CSV: ${err?.message ?? String(err)}`))
       }
     }
 
     // ── Email report ──────────────────────────────────────────────────────────
-    if (opts.mailTo) {
-      process.stdout.write(chalk.gray(`  ↑  Sending report to ${opts.mailTo} …`))
+    if (mailTo) {
+      console.log(chalk.gray(`  ↑  Sending report to ${mailTo} …`))
       try {
         await sendMailReport(allResults, totalMs, {
-          to:          opts.mailTo,
-          from:        opts.mailFrom,
-          subject:     opts.mailSubject,
+          to:          mailTo,
+          from:        mailFrom,
+          subject:     mailSubject,
           smtpHost:    smtpHost!,
           smtpPort:    smtpPort,
           smtpSecure:  smtpSecure,
           smtpUser:    smtpUser,
           smtpPass:    smtpPass,
+          csvPath:     savedCsvPath,
         })
-        process.stdout.write('\r' + chalk.green(`  ✓  Report sent to ${opts.mailTo}`) + ' '.repeat(20) + '\n')
+        console.log(chalk.green(`  ✓  Report sent to ${mailTo}`))
       } catch (err: any) {
-        process.stdout.write('\r' + chalk.red(`  ✗  Failed to send email: ${err?.message ?? String(err)}`) + '\n')
+        console.error(chalk.red(`  ✗  Failed to send email: ${err?.message ?? String(err)}`))
       }
     }
 
@@ -565,71 +609,6 @@ program
     process.exit(shouldFail ? 1 : 0)
   })
 
-// ── voiden-runner env ─────────────────────────────────────────────────────────
-
-const envCmd = program
-  .command('env')
-  .description('Manage persisted environment variables for the session')
-
-envCmd
-  .command('set <kv...>')
-  .description('Set one or more environment variables (KEY=VALUE)')
-  .action((kvs: string[]) => {
-    const env = loadSessionEnv()
-    for (const kv of kvs) {
-      const eq = kv.indexOf('=')
-      if (eq === -1) {
-        console.error(chalk.red(`  ✗  Invalid format: "${kv}" (expected KEY=VALUE)`))
-        continue
-      }
-      const key = kv.slice(0, eq).trim()
-      const val = kv.slice(eq + 1).trim().replace(/^["']|["']$/g, '')
-      if (!key) continue
-      env[key] = val
-      console.log(chalk.green(`  ✓  Set`) + ` ${key}=${val}`)
-    }
-    saveSessionEnv(env)
-  })
-
-envCmd
-  .command('list')
-  .description('List all persisted environment variables')
-  .action(() => {
-    const env = loadSessionEnv()
-    const keys = Object.keys(env)
-    if (keys.length === 0) {
-      console.log(chalk.gray('  No persisted environment variables.'))
-      return
-    }
-    console.log()
-    for (const key of keys) {
-      console.log(`  ${chalk.bold(key.padEnd(24))} ${chalk.gray(env[key])}`)
-    }
-    console.log()
-  })
-
-envCmd
-  .command('remove <keys...>')
-  .description('Remove one or more persisted environment variables')
-  .action((keys: string[]) => {
-    const env = loadSessionEnv()
-    for (const key of keys) {
-      if (env[key] !== undefined) {
-        delete env[key]
-        console.log(chalk.yellow(`  ·  Removed`) + ` ${key}`)
-      }
-    }
-    saveSessionEnv(env)
-  })
-
-envCmd
-  .command('clear')
-  .description('Clear all persisted environment variables')
-  .action(() => {
-    saveSessionEnv({})
-    console.log(chalk.yellow('  ✓  Cleared all persisted environment variables'))
-  })
-
 // ── voiden-runner session ─────────────────────────────────────────────────────
 
 const sessionCmd = program
@@ -638,17 +617,46 @@ const sessionCmd = program
 
 sessionCmd
   .command('clear')
-  .description('Clear all session data (env, results, and runtime variables)')
+  .description('Clear all session data (results and runtime variables)')
   .action(() => {
     clearSession()
-    console.log(chalk.yellow('  ✓  Session cleared (env, results, and runtime variables wiped)'))
+    console.log(chalk.yellow('  ✓  Session cleared (results and runtime variables wiped)'))
+  })
+
+sessionCmd
+  .command('vars')
+  .description('List all persisted runtime variables')
+  .action(() => {
+    const VARS_PATH = join(STORE_DIR, '.process.env.json')
+    if (!existsSync(VARS_PATH)) {
+      console.log(chalk.gray('  No persisted runtime variables.'))
+      return
+    }
+    try {
+      const vars = JSON.parse(readFileSync(VARS_PATH, 'utf-8'))
+      const keys = Object.keys(vars)
+      if (keys.length === 0) {
+        console.log(chalk.gray('  No persisted runtime variables.'))
+        return
+      }
+      console.log()
+      console.log(chalk.bold('  Persisted Runtime Variables'))
+      console.log(DIVIDER)
+      for (const key of keys) {
+        const val = typeof vars[key] === 'object' ? JSON.stringify(vars[key]) : String(vars[key])
+        console.log(`  ${chalk.bold(key.padEnd(24))} ${chalk.gray(val)}`)
+      }
+      console.log(DIVIDER)
+      console.log()
+    } catch {
+      console.error(chalk.red('  ✗  Failed to read runtime variables file.'))
+    }
   })
 
 sessionCmd
   .command('status')
   .description('Show summary of current session')
   .action(() => {
-    const env = loadSessionEnv()
     const results = loadSessionResults()
     const VARS_PATH = join(STORE_DIR, '.process.env.json')
     const varsCount = existsSync(VARS_PATH) ? Object.keys(JSON.parse(readFileSync(VARS_PATH, 'utf-8'))).length : 0
@@ -656,7 +664,6 @@ sessionCmd
     console.log()
     console.log(chalk.bold('  Session Status'))
     console.log(DIVIDER)
-    console.log(`  Environment variables:  ${Object.keys(env).length}`)
     console.log(`  Accumulated results:    ${results.length} requests`)
     console.log(`  Runtime variables:      ${varsCount}`)
     console.log(DIVIDER)
@@ -668,10 +675,17 @@ sessionCmd
 program
   .command('report')
   .description('Generate reports from accumulated session results')
+  .option('-e, --env <path>', 'Path to .env or .yaml file for SMTP configuration')
   .option('--csv <path>', 'Export session results to a CSV file')
+  .option('--mail', 'Send HTML report to address specified in VOIDEN_MAIL_TO env')
   .option('--mail-to <address>', 'Send HTML report of session results to this email address')
   .option('--mail-from <address>', 'Sender address for the report email')
   .option('--mail-subject <subject>', 'Email subject line')
+  .option('--smtp-host <host>', 'SMTP server host')
+  .option('--smtp-port <port>', 'SMTP server port')
+  .option('--smtp-secure', 'Use TLS for SMTP (true/false)')
+  .option('--smtp-user <user>', 'SMTP username')
+  .option('--smtp-pass <pass>', 'SMTP password')
   .action(async (opts) => {
     const results = loadSessionResults()
     if (results.length === 0) {
@@ -679,49 +693,82 @@ program
       process.exit(1)
     }
 
-    if (!opts.csv && !opts.mailTo) {
-      console.log(chalk.gray(`  Session has ${results.length} accumulated results. Specify --csv or --mail-to to generate a report.`))
+    // Load optional .env for report SMTP settings
+    const env: Record<string, string> = { ...process.env } as any
+    if (opts.env) {
+      const envPath = resolve(opts.env)
+      if (existsSync(envPath)) {
+        try {
+          Object.assign(env, loadEnvFile(envPath))
+        } catch {}
+      }
+    }
+
+    const mailTo = opts.mailTo || (opts.mail ? env.VOIDEN_MAIL_TO : undefined)
+    const mailFrom = opts.mailFrom || env.VOIDEN_MAIL_FROM
+    const mailSubject = opts.mailSubject || env.VOIDEN_MAIL_SUBJECT
+
+    if (opts.mail || opts.mailTo) {
+      if (!mailTo) {
+        console.error(chalk.red('  ✗  Mail error: no recipient found. Please provide --mail-to or set VOIDEN_MAIL_TO.'))
+        process.exit(1)
+      }
+      if (!opts.csv) {
+        console.error(chalk.red('  ✗  Mail error: no CSV generated. Mail requires --csv flag.'))
+        process.exit(1)
+      }
+      const smtpHost = opts.smtpHost || env.VOIDEN_SMTP_HOST
+      if (!smtpHost) {
+        console.error(chalk.red('  ✗  Mail keys are missing. Please provide SMTP configuration (VOIDEN_SMTP_HOST).'))
+        process.exit(1)
+      }
+    }
+
+    if (!opts.csv && !mailTo) {
+      console.log(chalk.gray(`  Session has ${results.length} accumulated results. Specify --csv to generate a report.`))
       return
     }
 
+    let savedCsvPath: string | undefined
     if (opts.csv) {
       try {
-        const savedTo = exportToCsv(results, opts.csv)
-        console.log(chalk.green(`  ✓  CSV report saved to ${savedTo}`))
+        savedCsvPath = exportToCsv(results, opts.csv)
+        console.log(chalk.green(`  ✓  CSV report saved to ${savedCsvPath}`))
       } catch (err: any) {
         console.error(chalk.red(`  ✗  Failed to write CSV: ${err?.message ?? String(err)}`))
       }
     }
 
-    if (opts.mailTo) {
-      const env = loadSessionEnv()
-      const smtpHost = env.VOIDEN_SMTP_HOST || process.env.VOIDEN_SMTP_HOST
-      const smtpPort = parseInt(env.VOIDEN_SMTP_PORT || process.env.VOIDEN_SMTP_PORT || '0') || undefined
-      const smtpSecure = (env.VOIDEN_SMTP_SECURE || process.env.VOIDEN_SMTP_SECURE) === 'true'
-      const smtpUser = env.VOIDEN_SMTP_USER || process.env.VOIDEN_SMTP_USER
-      const smtpPass = env.VOIDEN_SMTP_PASS || process.env.VOIDEN_SMTP_PASS
+    if (mailTo) {
+      // SMTP settings — read from CLI options or environment
+      const smtpHost = opts.smtpHost || env.VOIDEN_SMTP_HOST || process.env.VOIDEN_SMTP_HOST
+      const smtpPort = parseInt(opts.smtpPort || env.VOIDEN_SMTP_PORT || process.env.VOIDEN_SMTP_PORT || '0') || undefined
+      const smtpSecure = opts.smtpSecure || (env.VOIDEN_SMTP_SECURE || process.env.VOIDEN_SMTP_SECURE) === 'true'
+      const smtpUser = opts.smtpUser || env.VOIDEN_SMTP_USER || process.env.VOIDEN_SMTP_USER
+      const smtpPass = opts.smtpPass || env.VOIDEN_SMTP_PASS || process.env.VOIDEN_SMTP_PASS
 
       if (!smtpHost) {
         console.error(chalk.red('  ✗  SMTP configuration required for email reports.'))
-        console.log(chalk.gray('     Set VOIDEN_SMTP_HOST in your session env or process environment.'))
+        console.log(chalk.gray('     Set VOIDEN_SMTP_HOST in your environment or use --smtp-host.'))
         process.exit(1)
       }
 
-      process.stdout.write(chalk.gray(`  ↑  Sending session report to ${opts.mailTo} …`))
+      console.log(chalk.gray(`  ↑  Sending session report to ${mailTo} …`))
       try {
         await sendMailReport(results, 0, {
-          to:          opts.mailTo,
-          from:        opts.mailFrom,
-          subject:     opts.mailSubject || `Voiden Session Report (${results.length} requests)`,
+          to:          mailTo,
+          from:        mailFrom,
+          subject:     mailSubject || `Voiden Session Report (${results.length} requests)`,
           smtpHost:    smtpHost!,
           smtpPort:    smtpPort,
           smtpSecure:  smtpSecure,
           smtpUser:    smtpUser,
           smtpPass:    smtpPass,
+          csvPath:     savedCsvPath,
         })
-        process.stdout.write('\r' + chalk.green(`  ✓  Report sent to ${opts.mailTo}`) + ' '.repeat(20) + '\n')
+        console.log(chalk.green(`  ✓  Report sent to ${mailTo}`))
       } catch (err: any) {
-        process.stdout.write('\r' + chalk.red(`  ✗  Failed to send email: ${err?.message ?? String(err)}`) + '\n')
+        console.error(chalk.red(`  ✗  Failed to send email: ${err?.message ?? String(err)}`))
       }
     }
   })

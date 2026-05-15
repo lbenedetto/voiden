@@ -26,6 +26,53 @@ import { normalizeBlocks } from './blockSchemaRegistry.js'
 import { extractRuntimeVarRows, captureRuntimeVars } from './runtimeVars.js'
 import type { RunResult } from './types.js'
 
+// ─── Raw request extraction from blocks (used for error reporting) ────────────
+//
+// Extracts the unresolved URL, method, headers and body directly from the
+// normalised block tree — before env/process-var substitution happens.
+// This lets us show the user what was attempted even when the request threw
+// before requestMeta was populated (e.g. invalid URL after unresolved {{KEY}}).
+
+interface RawRequestInfo {
+  url:     string
+  method:  string
+  headers: Record<string, string>
+  body?:   string
+}
+
+function extractRawRequest(blocks: any[]): RawRequestInfo {
+  const req = blocks.find((b: any) => b.type === 'request')
+  let url    = ''
+  let method = 'GET'
+  if (req && Array.isArray(req.content)) {
+    for (const node of req.content) {
+      if (node.type === 'method' && typeof node.content === 'string') method = node.content.trim()
+      if (node.type === 'url'    && typeof node.content === 'string') url    = node.content.trim()
+    }
+  }
+
+  const headers: Record<string, string> = {}
+  const ht = blocks.find((b: any) => b.type === 'headers-table')
+  if (ht && Array.isArray(ht.content)) {
+    for (const child of ht.content) {
+      if (child.type === 'table' && Array.isArray(child.rows)) {
+        for (const r of child.rows) {
+          if (Array.isArray(r.row) && r.row.length >= 2) {
+            const k = String(r.row[0] ?? '').trim()
+            const v = String(r.row[1] ?? '').trim()
+            if (k) headers[k] = v
+          }
+        }
+      }
+    }
+  }
+
+  const jb  = blocks.find((b: any) => b.type === 'json_body')
+  const body = jb?.attrs?.body ? String(jb.attrs.body) : undefined
+
+  return { url, method, headers, body }
+}
+
 // ─── Block → document JSON (headless editor shim) ─────────────────────────────
 //
 // Converts the flat array of blocks for a section into a TipTap-like JSON
@@ -159,15 +206,19 @@ export async function runVoidFile(
     const editor = { getJSON: () => doc }
 
     // 3. Inject CLI env + runtime vars so scripting hooks can access them via
-    //    editor.__cliEnv  (→ vd.env.get)
-    //    editor.__cliVars (→ vd.variables.get/set — mutating this mutates runtimeVars)
+    //    editor.__cliEnv  (→ voiden.env.get)
+    //    editor.__cliVars (→ voiden.variables.get/set — mutating this mutates runtimeVars)
     ;(editor as any).__cliEnv  = env
     ;(editor as any).__cliVars = runtimeVars   // shared reference — mutations propagate
 
+    // Extract raw request info before executing — used to populate failure
+    // results when the pipeline catches the error internally (e.g. unresolved
+    // {{KEY}} → invalid URL → fetch fails before requestMeta is populated).
+    const raw = extractRawRequest(normalizedBlocks)
+
     // 4. Run the full pipeline via the shared orchestrator.
-    //    If no parser plugin registered an onBuildRequest handler for this block
-    //    type (e.g. the plugin is disabled), the orchestrator throws and we
-    //    record the error — identical behaviour to the Electron app.
+    //    The pipeline executor catches network errors internally and returns a
+    //    failed PipelineResponse rather than throwing, so we handle both paths.
     let response: PipelineResponse
     try {
       response = await requestOrchestrator.executeRequest(editor, ipcAdapter)
@@ -175,17 +226,33 @@ export async function runVoidFile(
       results.push({
         label: section.label,
         result: {
-          protocol:  'unknown',
-          url:       '',
-          success:   false,
-          durationMs: Date.now() - startMs,
-          error:     err?.message ?? String(err),
+          protocol:       'rest',
+          method:         raw.method,
+          url:            raw.url,
+          success:        false,
+          durationMs:     Date.now() - startMs,
+          error:          err?.message ?? String(err),
+          requestHeaders: Object.keys(raw.headers).length ? raw.headers : undefined,
+          requestBody:    raw.body,
         },
       })
       continue
     }
 
     const runResult = toRunResult(response, response.url ?? '', startMs)
+
+    // If the request failed before it was sent (empty URL / no requestMeta),
+    // fill in the raw block values so the CLI can show what was attempted.
+    if (!runResult.success && !runResult.url && raw.url) {
+      runResult.url    = raw.url
+      runResult.method = runResult.method ?? raw.method
+      if (!runResult.requestHeaders && Object.keys(raw.headers).length) {
+        runResult.requestHeaders = raw.headers
+      }
+      if (!runResult.requestBody && raw.body) {
+        runResult.requestBody = raw.body
+      }
+    }
     results.push({ label: section.label, result: runResult })
 
     // 5. Capture runtime variables from this section's blocks.

@@ -90,46 +90,43 @@ voiden-runner run <paths...> [options]
 | `--bail` | Stop on first failure, exit 1 |
 | `--stop-on-failure` | Alias for `--bail` (shell `set -e` friendly) |
 | `--fail-on-error` | Run all files first, then exit 1 if any failed |
-| `--no-scripts` | Skip the `voiden-scripting` plugin entirely (recommended for CI/CD) |
-| `--no-cache-vars` | Do not load/save runtime variables to `~/.voiden/.process.env.json` |
-| `--show-body` | Print the full response body under each result |
+| `--show-req` | Print sent request headers and body for each request |
+| `--show-res` | Print response headers and body for each request |
 | `--verbose` | Print script logs, plugin messages, and section dividers |
 | `--json` | Machine-readable JSON output (suppresses normal output) |
-| `--no-session` | Do not load/save session environment or results |
+| `--no-session` | Completely stateless run (do not load/save results or runtime variables) |
 | `--output-json <file>` | Write the full result object to a JSON file — pass the whole response data to the next CLI or script |
 | `--csv <path>` | Export full report to a CSV file. Use `.` for the current directory (auto-generates filename) |
-| `--mail-to <address>` | Send HTML report to this email address |
-| `--mail-from <address>` | Sender address |
-| `--mail-subject <text>` | Email subject (default: auto-generated summary) |
+| `--mail` | Send HTML summary + attached CSV using `VOIDEN_MAIL_TO` (requires `--csv`) |
+| `--mail-to <address>` | Send HTML summary + attached CSV to this address (requires `--csv`) |
+| `--mail-from <address>` | Sender address (default: `VOIDEN_MAIL_FROM` env) |
+| `--mail-subject <text>` | Email subject (default: `VOIDEN_MAIL_SUBJECT` env or auto-summary) |
+| `--smtp-host <host>` | SMTP server host (default: `VOIDEN_SMTP_HOST` env) |
+| `--smtp-port <port>` | SMTP server port (default: `VOIDEN_SMTP_PORT` env) |
+| `--smtp-secure` | Use TLS for SMTP (default: `VOIDEN_SMTP_SECURE` env) |
+| `--smtp-user <user>` | SMTP username (default: `VOIDEN_SMTP_USER` env) |
+| `--smtp-pass <pass>` | SMTP password (default: `VOIDEN_SMTP_PASS` env) |
 
-### `env`
-
-```
-voiden-runner env set <key=value...>
-voiden-runner env list
-voiden-runner env remove <keys...>
-voiden-runner env clear
-```
-
-Manage environment variables that persist across the session.
-
-### `session`
+### Environment Variables
 
 ```
 voiden-runner session status
+voiden-runner session vars
 voiden-runner session clear
 ```
 
-`status` shows counts of stored variables and results. `clear` wipes all session
-state (env, results, runtime vars).
+`status` shows counts of stored variables and results. `vars` lists all currently
+stored runtime variables and their values. `clear` wipes all session
+state (results and runtime variables).
 
 ### `report`
 
 ```
-voiden-runner report [--csv <path>] [--mail-to <address>]
+voiden-runner report [--csv <path>] [--mail-to <address>] [--env .env]
 ```
 
 Generate a combined report from all accumulated results in the current session.
+Accepts all mail and SMTP options listed above.
 
 ### `plugin`
 
@@ -175,10 +172,8 @@ assertion expected values.
 1. **System environment** — `process.env`, including CI/CD platform variables
    (GitHub Actions secrets, GitLab CI variables, etc.) — always available, no
    flag needed
-2. **Session env** — set via `voiden-runner env set KEY=value`, persists across
-   runs
-3. **`--env` file** — standard `.env` file, overrides system + session
-4. **`--env-var` overrides** — per-run inline overrides, highest priority
+2. **`--env` file** — standard `.env` file, overrides system variables
+3. **`--env-var` overrides** — per-run inline overrides, highest priority
 
 ### `--env` file format
 
@@ -212,7 +207,7 @@ api-tests:
   script: voiden-runner run tests/      # {{CI_COMMIT_SHA}}, {{API_KEY}} etc. just work
 ```
 
-Available inside scripts as `vd.env.get('KEY')`.
+Available inside scripts as `voiden.env.get('KEY')`.
 
 ---
 
@@ -260,10 +255,10 @@ Inside pre-request and post-response scripts:
 
 ```javascript
 // Read a runtime variable
-const token = vd.variables.get('token')
+const token = voiden.variables.get('token')
 
 // Write a runtime variable (available to all subsequent requests in this run)
-vd.variables.set('token', vd.response.body.access_token)
+voiden.variables.set('token', voiden.response.body.access_token)
 ```
 
 ### Persistence
@@ -271,8 +266,8 @@ vd.variables.set('token', vd.response.body.access_token)
 By default, runtime variables are **persisted to disk** at `~/.voiden/.process.env.json`.
 This allows you to share state across multiple `voiden-runner` commands.
 
-- **To disable persistence** (keep variables in-memory only for a single run), use the `--no-cache-vars` flag.
-- **To clear variables**, delete the `.process.env.json` file or overwrite them in a script.
+- **To disable persistence** (keep variables in-memory only for a single run), use the `--no-session` flag.
+- **To clear variables**, delete the `.process.env.json` file or use `voiden-runner session clear`.
 
 The `.void` files themselves are never modified. This ensures that your source
 files remain clean while still allowing for stateful execution chains.
@@ -307,27 +302,19 @@ in `get-profile.void`.
 ## Sessions & Persistence
 
 By default, `voiden-runner` operates in a **stateful session**. This means it
-persists environment variables, captured runtime variables, and run results
-across multiple command invocations until you explicitly clear them.
+persists captured runtime variables and run results across multiple command 
+invocations until you explicitly clear them.
 
-### Environment variables (`env`)
-
-You can set environment variables once and use them in all subsequent runs
-without passing `--env` every time.
+### 1. Persistent State
+Captured variables stay active until you clear the session. This is ideal for 
+multi-step workflows:
 
 ```bash
-# Set variables
-voiden-runner env set BASE_URL=https://api.example.com
-voiden-runner env set API_KEY=sk_test_123
-
-# List current session variables
-voiden-runner env list
-
-# Run files (automatically uses the variables above)
-voiden-runner run auth.void
+voiden-runner run login.void        # captures token
+voiden-runner run get-profile.void  # uses {{process.token}} automatically
 ```
 
-### Accumulated Results & Reporting
+### 2. Accumulated Results & Reporting
 
 Every time you call `run`, the results are appended to a session results file.
 This allows you to generate a single report for a series of separate runs.
@@ -352,7 +339,7 @@ Use the `session` command to check status or wipe all state.
 # See how many variables and results are stored
 voiden-runner session status
 
-# Wipe everything (env, results, and runtime variables)
+# Wipe everything (results and runtime variables)
 voiden-runner session clear
 ```
 
@@ -377,30 +364,26 @@ scripts embedded in the `.void` file.
 | Python | `python3` subprocess (detected at startup; clear error if missing) |
 | Shell (bash) | `bash` subprocess with temp file isolation |
 
-> **Security note for CI/CD:** Python and Shell scripts can execute arbitrary
-> system commands. Use `--no-scripts` to disable all script execution when
-> running `.void` files from untrusted sources.
-
-**`vd` API inside scripts**
+**voiden API inside scripts**
 
 | Property / Method | Description |
 |---|---|
-| `vd.request.url` | Request URL (read/write in pre-script) |
-| `vd.request.method` | HTTP method (read/write in pre-script) |
-| `vd.request.headers` | Headers array `[{key, value}]` (read/write) |
-| `vd.request.body` | Request body string (read/write) |
-| `vd.request.queryParams` | Query params array (read/write) |
-| `vd.request.pathParams` | Path params array (read/write) |
-| `vd.response` | Response object (post-script only) |
-| `vd.response.status` | HTTP status code |
-| `vd.response.body` | Parsed response body |
-| `vd.response.headers` | Response headers `{key: value}` |
-| `vd.env.get('KEY')` | Read from `--env` file |
-| `vd.variables.get('KEY')` | Read a runtime variable |
-| `vd.variables.set('KEY', val)` | Write a runtime variable (available to next request) |
-| `vd.assert(actual, op, expected, msg?)` | Emit a pass/fail assertion |
-| `vd.log(level?, ...args)` | Emit a log line (`--verbose` to see them) |
-| `vd.cancel()` | Cancel the request from a pre-script |
+| `voiden.request.url` | Request URL (read/write in pre-script) |
+| `voiden.request.method` | HTTP method (read/write in pre-script) |
+| `voiden.request.headers` | Headers array `[{key, value}]` (read/write) |
+| `voiden.request.body` | Request body string (read/write) |
+| `voiden.request.queryParams` | Query params array (read/write) |
+| `voiden.request.pathParams` | Path params array (read/write) |
+| `voiden.response` | Response object (post-script only) |
+| `voiden.response.status` | HTTP status code |
+| `voiden.response.body` | Parsed response body |
+| `voiden.response.headers` | Response headers `{key: value}` |
+| `voiden.env.get('KEY')` | Read from `--env` file |
+| `voiden.variables.get('KEY')` | Read a runtime variable |
+| `voiden.variables.set('KEY', val)` | Write a runtime variable (available to next request) |
+| `voiden.assert(actual, op, expected, msg?)` | Emit a pass/fail assertion |
+| `voiden.log(level?, ...args)` | Emit a log line (`--verbose` to see them) |
+| `voiden.cancel()` | Cancel the request from a pre-script |
 
 **Assertion operators:** `==` `===` `!=` `!==` `>` `>=` `<` `<=`
 `contains` `includes` `matches` (regex) `truthy` `falsy`
@@ -409,17 +392,17 @@ scripts embedded in the `.void` file.
 **Example — pre-script adds a timestamp header:**
 
 ```javascript
-vd.request.headers.push({ key: 'X-Run-Ts', value: String(Date.now()), enabled: true })
-vd.log('info', 'Added X-Run-Ts')
+voiden.request.headers.push({ key: 'X-Run-Ts', value: String(Date.now()), enabled: true })
+voiden.log('info', 'Added X-Run-Ts')
 ```
 
 **Example — post-script asserts and captures a token:**
 
 ```javascript
-const body = vd.response.body
-vd.assert(vd.response.status, '==', 200, 'status is 200')
-vd.assert(body.access_token, 'truthy', null, 'token present')
-vd.variables.set('token', body.access_token)
+const body = voiden.response.body
+voiden.assert(voiden.response.status, '==', 200, 'status is 200')
+voiden.assert(body.access_token, 'truthy', null, 'token present')
+voiden.variables.set('token', body.access_token)
 ```
 
 ---
@@ -704,7 +687,6 @@ jobs:
         run: |
           voiden-runner run ./tests/ \
             --env .env.ci \
-            --no-scripts \
             --stop-on-failure \
             --json | tee results.json
 
@@ -722,7 +704,7 @@ api-tests:
     - npm install -g @voiden/runner
     - echo "BASE_URL=$BASE_URL" >> .env.ci
     - echo "API_KEY=$API_KEY"   >> .env.ci
-    - voiden-runner run ./tests/ --env .env.ci --no-scripts --stop-on-failure
+    - voiden-runner run ./tests/ --env .env.ci --stop-on-failure
 ```
 
 ### With scripting enabled

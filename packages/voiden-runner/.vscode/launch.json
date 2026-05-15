@@ -6,7 +6,7 @@
       "type": "node",
       "request": "launch",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--", "run","--show-body"],
+      "runtimeArgs": ["run", "dev", "--", "run","--show-req", "--show-res"],
       "args": ["${input:voidFile}"],
       "console": "integratedTerminal",
       "internalConsoleOptions": "neverOpen",

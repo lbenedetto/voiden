@@ -15,8 +15,8 @@
  *   {{process.token}}
  *
  * Script access:
- *   vd.variables.get('token')   // read
- *   vd.variables.set('token', v) // write — reflected immediately in the run
+ *   voiden.variables.get('token')   // read
+ *   voiden.variables.set('token', v) // write — reflected immediately in the run
  */
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -64,10 +64,22 @@ export function extractRuntimeVarRows(blocks: any[]): RuntimeVarRow[] {
       continue
     }
 
-    // ── Old TipTap table format ────────────────────────────────────────────
+    // ── App-generated table format: table.rows[].row ──────────────────────
     const table = block.content?.find((n: any) => n.type === 'table')
     if (!table) continue
 
+    if (Array.isArray(table.rows)) {
+      for (const r of table.rows) {
+        if (r.attrs?.disabled === true) continue
+        const key   = String(r.row?.[0] ?? '').trim()
+        const value = String(r.row?.[1] ?? '').trim()
+        if (!key || !value) continue
+        rows.push({ key, value, enabled: true })
+      }
+      continue
+    }
+
+    // ── Old TipTap table format: table.content[tableRow] ──────────────────
     for (const tr of table.content ?? []) {
       if (tr.type !== 'tableRow') continue
       if (tr.attrs?.disabled === true) continue
