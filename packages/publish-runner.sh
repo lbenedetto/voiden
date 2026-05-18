@@ -15,22 +15,22 @@ R_STATUS="❌ Failed"
 
 # 1. Build and Publish @voiden/executors (located at ./executors)
 echo "📦 Processing @voiden/executors..."
-if cd executors && npm run build && npm publish --tag beta --access public; then
-  E_STATUS="✅ Success"
+if cd executors && npm run build && npm publish --access public; then
+  E_STATUS="✅ Success (latest)"
 fi
 cd "$SCRIPT_DIR"
 
 # 2. Build and Publish @voiden/core-extensions (located at ../core-extensions)
 echo "📦 Processing @voiden/core-extensions..."
-if cd ../core-extensions && npm run build && npm publish --tag beta --access public; then
-  C_STATUS="✅ Success"
+if cd ../core-extensions && npm run build && npm publish --access public; then
+  C_STATUS="✅ Success (latest)"
 fi
 cd "$SCRIPT_DIR"
 
 # 3. Build and Publish @voiden/runner (located at ./voiden-runner)
 echo "🚀 Processing @voiden/runner..."
 if cd voiden-runner && npm run build && npm publish --tag beta --access public; then
-  R_STATUS="✅ Success"
+  R_STATUS="✅ Success (beta)"
 fi
 cd "$SCRIPT_DIR"
 
