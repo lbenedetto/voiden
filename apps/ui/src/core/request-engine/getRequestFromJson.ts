@@ -258,7 +258,8 @@ export const getRequest = async (
   const getProtocolType = (editor: Doc) => {
     if (findNode(editor, "gqlquery")) return "graphql";
     const endpointNode = findNode(editor, "socket-request");
-    const method = endpointNode?.content?.find((node) => node.type === "smethod")?.content?.[0]?.text || "GET";
+    const smethodNode = endpointNode?.content?.find((node) => node.type === "smethod");
+    const method = smethodNode?.content?.[0]?.text || smethodNode?.attrs?.method || "GET";
     const lower = method.toLowerCase();
     if (lower === "wss" || lower === "ws" || lower === "grpc" || lower === "grpcs") return lower;
     return "rest";

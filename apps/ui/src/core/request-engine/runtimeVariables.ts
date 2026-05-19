@@ -43,10 +43,15 @@ function findInKeyValueArray(arr: any[] | undefined, key: string): any {
     return found ? found[key] : undefined;
 }
 
-function findInKeyValueInKeyValue(arr: any[] | undefined): any {
+function findInKeyValueInKeyValue(arr: any[] | undefined, searchKey: string): any {
     if (!arr || !Array.isArray(arr)) return undefined;
-    // Find the first object that has the specified key
-    const found = arr.find(item => item && typeof item ==='object');
+    const found = arr.find(
+        item =>
+            item &&
+            typeof item === 'object' &&
+            typeof item.key === 'string' &&
+            item.key.toLowerCase() === searchKey.toLowerCase()
+    );
     return found ? found['value'] : undefined;
 }
 
@@ -142,7 +147,7 @@ function getValueByPath(obj: any, path: string): any {
 
             let value = ""
             if( 'key' in current[0] && 'value' in current[0]){
-                value = findInKeyValueInKeyValue(current);
+                value = findInKeyValueInKeyValue(current, key);
             }else{
                 value = findInKeyValueArray(current, key);
             }
