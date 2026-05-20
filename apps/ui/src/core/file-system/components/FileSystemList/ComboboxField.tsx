@@ -18,11 +18,12 @@ interface ComboboxFieldProps {
   showChevron?: boolean;
   openOnFocus?: boolean;
   truncateItems?: boolean;
+  appendOnPick?: string;
 }
 
 export function ComboboxField({
   id, tip, label, enabled, setEnabled, value, onChange, placeholder,
-  suggestions, showChevron, openOnFocus, truncateItems,
+  suggestions, showChevron, openOnFocus, truncateItems, appendOnPick,
 }: ComboboxFieldProps) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -50,8 +51,8 @@ export function ComboboxField({
   }, [open]);
 
   const pick = (item: string) => {
-    onChange(item);
-    setOpen(false);
+    onChange(item + (appendOnPick ?? ""));
+    if (!appendOnPick) setOpen(false);
     inputRef.current?.focus();
   };
 

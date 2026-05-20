@@ -97,6 +97,7 @@ export function SearchPanel({ search, onClose }: SearchPanelProps) {
           suggestions={dirSuggestions}
           openOnFocus
           truncateItems
+          appendOnPick="/"
         />
         <HiddenToggle checked={includeHidden} setChecked={setIncludeHidden} />
       </div>
