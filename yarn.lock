@@ -9413,7 +9413,33 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@voiden/core-extensions@npm:*, @voiden/core-extensions@workspace:*, @voiden/core-extensions@workspace:core-extensions":
+"@voiden/core-extensions@npm:latest":
+  version: 0.1.3
+  resolution: "@voiden/core-extensions@npm:0.1.3"
+  dependencies:
+    "@faker-js/faker": "npm:^9.0.3"
+    "@voiden/sdk": "npm:1.0.10-beta.0"
+    js-yaml: "npm:^4.1.0"
+    selfsigned: "npm:^5.5.0"
+    shell-quote: "npm:^1.8.1"
+    xlsx-js-style: "npm:^1.2.0"
+  peerDependencies:
+    "@tiptap/core": ^2.8.0
+    "@tiptap/pm": ^2.8.0
+    "@tiptap/react": ^2.8.0
+    "@tiptap/suggestion": ^2.8.0
+    lucide-react: "*"
+    react: ^18.2.0
+    react-dom: ^18.2.0
+    react-markdown: "*"
+    remark-gfm: "*"
+    tippy.js: "*"
+    zustand: "*"
+  checksum: 10c0/e095b2231d3518eb507853b4dba7132bf104161439969ad81a6e8dd1dfbf2c1f6f49de3c560fd80801afac47dc05038261271e055d56f55142bf338720ab4ff6
+  languageName: node
+  linkType: hard
+
+"@voiden/core-extensions@workspace:*, @voiden/core-extensions@workspace:core-extensions":
   version: 0.0.0-use.local
   resolution: "@voiden/core-extensions@workspace:core-extensions"
   dependencies:
@@ -9451,7 +9477,17 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@voiden/executors@npm:*, @voiden/executors@workspace:packages/executors":
+"@voiden/executors@npm:latest":
+  version: 0.1.2
+  resolution: "@voiden/executors@npm:0.1.2"
+  dependencies:
+    "@grpc/grpc-js": "npm:^1.10.0"
+    ws: "npm:^8.17.0"
+  checksum: 10c0/24c123a5fd647f05ca0670f0e06de56040d4571b03956098787bdf4cc911bf884e63b59333ee3e852818078da434c9264bc7859562610d4cfb6b4d2ea7a19d86
+  languageName: node
+  linkType: hard
+
+"@voiden/executors@workspace:packages/executors":
   version: 0.0.0-use.local
   resolution: "@voiden/executors@workspace:packages/executors"
   dependencies:
@@ -9479,8 +9515,8 @@ __metadata:
     "@types/node": "npm:^20.14.10"
     "@types/nodemailer": "npm:^8.0.0"
     "@types/ws": "npm:^8.5.10"
-    "@voiden/core-extensions": "npm:*"
-    "@voiden/executors": "npm:*"
+    "@voiden/core-extensions": "npm:latest"
+    "@voiden/executors": "npm:latest"
     "@voiden/sdk": "npm:^1.0.9"
     chalk: "npm:^5.3.0"
     commander: "npm:^12.0.0"
