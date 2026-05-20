@@ -196,7 +196,7 @@ declare global {
       };
       startSearch: (args: { query: string; matchCase: boolean; matchWholeWord: boolean; useRegex: boolean; useMultiline: boolean; searchId: number; fileMask?: string; dirMask?: string; includeHidden?: boolean }) => void;
       cancelSearch: (searchId: number) => void;
-      listDirs: () => Promise<string[]>;
+      listDirs: (parent?: string) => Promise<string[]>;
       onSearchResult: (cb: (data: { searchId: number; result: SearchResult }) => void) => () => void;
       onSearchDone: (cb: (data: { searchId: number; error?: string }) => void) => () => void;
       git: {

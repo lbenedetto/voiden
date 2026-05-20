@@ -130,9 +130,6 @@ function splitTextSegmentsWithType(text: string = '') {
 // thousands of matches on broad queries and keeps the IPC payload small.
 const MAX_SEARCH_RESULTS = 200;
 
-// Max directory depth for listDirs — keeps suggestions snappy on large repos.
-const MAX_DIR_LIST_DEPTH = 8;
-
 // Reject paths that are absolute, contain `..` segments, or otherwise escape
 // the project root. Used to sanitise user-supplied dirMask before it is fed
 // to ripgrep/fast-glob with `cwd: projectRoot`.
@@ -399,27 +396,23 @@ export function registerSearchIpcHandler() {
     }
   });
 
-  // Returns all relative directory paths in the active project, excluding build/tool dirs.
-  ipcMain.handle("files:dirList", async () => {
+  // Returns immediate child directories of the given parent (relative to the
+  // active project root), excluding build/tool dirs. Parent defaults to root.
+  ipcMain.handle("files:dirList", async (_event, parent?: string) => {
     let projectRoot: string | null = null;
     try { projectRoot = await getActiveProject(); } catch { return []; }
     if (!projectRoot) return [];
 
-    const SKIP_BUILD_DIRS = [
-      "node_modules", ".git", "dist", "build", ".next", ".nuxt", ".cache",
-      ".turbo", ".svelte-kit", "out", ".output", ".vercel", "__pycache__",
-      ".venv", "venv", ".tox", "vendor", "Pods", ".gradle", "target",
-      ...SKIP_DIR,
-    ];
+    const safeParent = parent && isSafeRelativePath(parent) ? parent.replace(/[/\\]+$/, "") : "";
+    const absParent = safeParent ? path.join(projectRoot, safeParent) : projectRoot;
+    const prefix = safeParent ? safeParent.replace(/\\/g, "/") + "/" : "";
+
     try {
-      const dirs: string[] = await fg("**", {
-        cwd: projectRoot,
-        onlyDirectories: true,
-        dot: true,
-        deep: MAX_DIR_LIST_DEPTH,
-        ignore: SKIP_BUILD_DIRS.map((d) => `**/${d}/**`).concat(SKIP_BUILD_DIRS.map((d) => d)),
-      });
-      return dirs.sort();
+      const entries = await fsPromises.readdir(absParent, { withFileTypes: true });
+      return entries
+        .filter((e) => e.isDirectory())
+        .map((e) => prefix + e.name)
+        .sort();
     } catch {
       return [];
     }

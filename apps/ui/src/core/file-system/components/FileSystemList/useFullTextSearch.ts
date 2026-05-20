@@ -36,23 +36,23 @@ export function useFullTextSearch({
   const debouncedFileMask = useDebounce(fileMask, 300);
   const debouncedDirMask = useDebounce(dirMask, 300);
 
-  const [allDirs, setAllDirs] = useState<string[]>([]);
-  const lastFetchedRootRef = useRef<string | undefined>(undefined);
+  const [childDirs, setChildDirs] = useState<string[]>([]);
+  const lastFetchedKeyRef = useRef<string | undefined>(undefined);
+
+  const parentPrefix = useMemo(() => {
+    const lastSlash = dirMask.lastIndexOf("/");
+    return lastSlash >= 0 ? dirMask.slice(0, lastSlash + 1) : "";
+  }, [dirMask]);
 
   const dirSuggestions = useMemo(() => {
-    const lastSlash = dirMask.lastIndexOf("/");
-    const parentPrefix = lastSlash >= 0 ? dirMask.slice(0, lastSlash + 1) : "";
-    const partial = dirMask.slice(lastSlash + 1).toLowerCase();
-    return allDirs.filter((d) => {
-      // Hide dot-dirs unless the user opted into hidden-file search.
-      if (!includeHidden && d.split("/").some((seg) => seg.startsWith("."))) return false;
-      if (!d.toLowerCase().startsWith(parentPrefix.toLowerCase())) return false;
+    const partial = dirMask.slice(parentPrefix.length).toLowerCase();
+    return childDirs.filter((d) => {
       const rest = d.slice(parentPrefix.length);
-      if (rest.includes("/")) return false;
+      if (!includeHidden && rest.startsWith(".")) return false;
       if (partial && !rest.toLowerCase().startsWith(partial)) return false;
       return true;
     }).slice(0, 10);
-  }, [allDirs, dirMask, includeHidden]);
+  }, [childDirs, dirMask, parentPrefix, includeHidden]);
 
   useEffect(() => {
     if (rawQuery.includes("\n")) setUseMultiline(true);
@@ -73,12 +73,14 @@ export function useFullTextSearch({
 
   useEffect(() => {
     if (!storeIsSearching) return;
-    // Cache by project root: re-fetch only when the active project changes,
-    // not every time the search panel re-opens.
-    if (lastFetchedRootRef.current === activeDirectory) return;
-    lastFetchedRootRef.current = activeDirectory;
-    window.electron?.listDirs?.().then((dirs) => setAllDirs(dirs ?? [])).catch(() => {});
-  }, [storeIsSearching, activeDirectory]);
+    const key = `${activeDirectory ?? ""}::${parentPrefix}`;
+    if (lastFetchedKeyRef.current === key) return;
+    lastFetchedKeyRef.current = key;
+    const parent = parentPrefix.replace(/\/+$/, "");
+    window.electron?.listDirs?.(parent || undefined)
+      .then((dirs) => setChildDirs(dirs ?? []))
+      .catch(() => {});
+  }, [storeIsSearching, activeDirectory, parentPrefix]);
 
   useEffect(() => {
     if (storeIsSearching) {
