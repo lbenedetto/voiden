@@ -24,6 +24,7 @@ import { registerCliIpcHandlers } from "./main/ipc/cli";
 import { registerSkillsIpcHandlers } from "./main/ipc/skills";
 import { registerPythonScriptIpcHandler } from "./main/ipc/pythonScript";
 import { registerNodeScriptIpcHandler } from "./main/ipc/nodeScript";
+import { registerCoreExtensionsIpcHandlers } from "./main/ipc/coreExtensions";
 import { loadMainProcessExtensions, unloadMainProcessExtensions } from "./main/extensionLoader";
 import { recomposeAndInstall } from "./main/skillsInstaller";
 import { setupLoggerIPC, logger } from "./main/logger";
@@ -183,6 +184,7 @@ app.on("ready", async () => {
   registerSkillsIpcHandlers();
   registerPythonScriptIpcHandler();
   registerNodeScriptIpcHandler();
+  registerCoreExtensionsIpcHandlers();
   ipcStateHandlers();
 
   // Initialize auto-updates with the configured channel

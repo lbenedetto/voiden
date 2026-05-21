@@ -93,6 +93,24 @@ export const extensionsApi = {
     ipcRenderer.invoke("extensions:update", extensionId),
 };
 
+export const coreExtensionsApi = {
+  /**
+   * Returns { pluginId: absoluteFilePath } for every core plugin that has a
+   * downloaded update cached on disk. Used by the plugin loader to prefer the
+   * updated bundle over the build-time bundled version.
+   */
+  getCachedPlugins: (): Promise<Record<string, string>> =>
+    ipcRenderer.invoke("coreExtensions:getCachedPlugins"),
+
+  /**
+   * Fetches the latest core-extensions GitHub release, compares per-plugin
+   * versions against the local cache, and downloads only the plugins that changed.
+   * Returns { updated: string[], upToDate: boolean }.
+   */
+  checkAndUpdate: (): Promise<{ updated: string[]; upToDate: boolean; error?: string }> =>
+    ipcRenderer.invoke("coreExtensions:checkAndUpdate"),
+};
+
 export const ipcApi = {
   on: (
     channel: string,

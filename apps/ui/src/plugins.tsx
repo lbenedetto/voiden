@@ -830,6 +830,18 @@ export const getPlugins = async () => {
 
   const extensions = getQueryClient().getQueryData(["extensions"]) as any[];
 
+  // Fetch paths to any core plugins that have been downloaded as updated bundles.
+  // If a cached path exists for a plugin it will be loaded instead of the bundled version.
+  let cachedCorePaths: Record<string, string> = {};
+  try {
+    const coreExtApi = (window as any).electron?.coreExtensions;
+    if (coreExtApi?.getCachedPlugins) {
+      cachedCorePaths = await coreExtApi.getCachedPlugins();
+    }
+  } catch (e) {
+    extensionLogger.warn('Failed to fetch cached core extension paths:', e);
+  }
+
   // Register block ownership and create placeholders for disabled plugins
   const { registerBlockOwnership, createPlaceholderBlock } = await import('@/core/editors/voiden/extensions/PlaceholderBlock');
 
@@ -869,19 +881,33 @@ export const getPlugins = async () => {
       if (extension.type === "core") {
         extensionLogger.info(`Loading core extension: ${extension.id}`);
 
-        // Validate extension is in registry
-        const returnCoreExtension = (id: string) => {
-          if (coreExtensionPlugins[id]) {
-            return coreExtensionPlugins[id];
-          }
-          extensionLogger.warn(`Core extension ${id} not found in registry`);
-          return undefined;
-        };
+        let plugin: ((context: PluginContext) => Plugin) | undefined;
 
-        const plugin = returnCoreExtension(extension.id);
+        // Prefer a downloaded-and-cached bundle (updated version) over the bundled one
+        const cachedPath = cachedCorePaths[extension.id];
+        if (cachedPath) {
+          extensionLogger.info(`Using cached bundle for ${extension.id}: ${cachedPath}`);
+          try {
+            const mod = await import(/* @vite-ignore */ `file://${cachedPath}`);
+            if (mod?.default && typeof mod.default === 'function') {
+              plugin = mod.default;
+            } else {
+              extensionLogger.warn(`Cached bundle for ${extension.id} has no default export — falling back to bundled version`);
+            }
+          } catch (cacheErr) {
+            extensionLogger.warn(`Failed to load cached bundle for ${extension.id}:`, cacheErr, '— falling back to bundled version');
+          }
+        }
+
+        // Fall back to the build-time bundled version
         if (!plugin) {
-          console.warn(`[Plugin Loader] Core extension ${extension.id} not found in registry, skipping`);
-          continue;
+          if (coreExtensionPlugins[extension.id]) {
+            plugin = coreExtensionPlugins[extension.id];
+          } else {
+            extensionLogger.warn(`Core extension ${extension.id} not found in registry`);
+            console.warn(`[Plugin Loader] Core extension ${extension.id} not found in registry, skipping`);
+            continue;
+          }
         }
 
         // Validate plugin is a function
@@ -960,6 +986,32 @@ export const getPlugins = async () => {
 export const PluginProvider = ({ children }: { children: React.ReactNode }) => {
   const { data: extensions, isLoading: extLoading } = useGetExtensions();
   const isInitialized = usePluginStore((state) => state.isInitialized);
+  const updateCheckRan = _ReactShim.useRef(false);
+
+  // After the first initialization, check GitHub for updated core extension bundles.
+  // Downloads happen in the background; a toast tells the user to restart if anything changed.
+  useEffect(() => {
+    if (!isInitialized || updateCheckRan.current) return;
+    updateCheckRan.current = true;
+
+    (async () => {
+      try {
+        const coreExtApi = (window as any).electron?.coreExtensions;
+        if (!coreExtApi?.checkAndUpdate) return;
+
+        const result = await coreExtApi.checkAndUpdate();
+        if (result?.updated?.length > 0) {
+          const count: number = result.updated.length;
+          toast.info(
+            `Core extensions updated (${count} plugin${count > 1 ? 's' : ''}). Please restart the app to apply changes.`,
+            { duration: 10000 },
+          );
+        }
+      } catch (e) {
+        extensionLogger.warn('Core extension update check failed:', e);
+      }
+    })();
+  }, [isInitialized]);
 
   useEffect(() => {
     const reloadPlugins = async () => {
