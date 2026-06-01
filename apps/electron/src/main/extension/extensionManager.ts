@@ -2,13 +2,28 @@
 import { getRemoteExtensions } from "./extensionFetcher";
 import * as installer from "./extensionInstaller";
 import fs from "fs/promises";
+import { existsSync, readFileSync } from "fs";
 import path from "path";
 import { app } from "electron";
 import { AppState, ExtensionData } from "src/shared/types";
-import { coreExtensions } from "../config/coreExtensions";
+import { coreExtensions, remoteVersions, remoteNewPlugins } from "../config/coreExtensions";
+import { satisfiesVersionRange } from "../ipc/coreExtensions";
 import AdmZip from "adm-zip";
 
-const communityDir = path.join(app.getPath("userData"), "extensions");
+import { coreCacheDir, communityDir, coreDisabledPath } from './paths';
+
+function readDisabledCorePluginsSync(): Set<string> {
+  try {
+    const raw = require("fs").readFileSync(coreDisabledPath(), "utf8");
+    return new Set(JSON.parse(raw));
+  } catch {
+    return new Set();
+  }
+}
+
+async function saveDisabledCorePlugins(ids: Set<string>): Promise<void> {
+  await fs.writeFile(coreDisabledPath(), JSON.stringify([...ids], null, 2));
+}
 
 export class ExtensionManager {
   constructor(private store: AppState) {}
@@ -18,7 +33,7 @@ export class ExtensionManager {
     this.syncCoreExtensions();
 
     try {
-      const data = await fs.readFile(path.join(communityDir, "installed.json"), "utf8");
+      const data = await fs.readFile(path.join(communityDir(), "installed.json"), "utf8");
       const installed: ExtensionData[] = JSON.parse(data);
 
       // Enrich each installed extension with data from its on-disk manifest
@@ -34,6 +49,8 @@ export class ExtensionManager {
               capabilities: manifest.capabilities || ext.capabilities,
               features: manifest.features || ext.features,
               dependencies: manifest.dependencies || ext.dependencies,
+              mainProcess: manifest.mainProcess ?? ext.mainProcess,
+              permissions: manifest.permissions ?? ext.permissions ?? [],
             };
           } catch {
             return ext;
@@ -76,39 +93,122 @@ export class ExtensionManager {
    * This ensures:
    * - New core extensions are automatically added
    * - Existing core extensions are updated with latest metadata
-   * - User's enabled/disabled preferences are preserved
+   * - User's enabled/disabled preferences are preserved (via plugins/core-disabled.json, shared across all windows)
    */
-  private syncCoreExtensions(): void {
-    const existingCoreExtensions = this.store.extensions.filter((ext) => ext.type === "core");
-    const syncedCoreExtensions: ExtensionData[] = [];
+  syncCoreExtensions(): void {
+    // Enabled state is global (shared across windows), not per-window.
+    // A plugin is enabled by default if it is installed; explicit disable is tracked in plugins/core-disabled.json.
+    const disabled = readDisabledCorePluginsSync();
 
-    for (const coreExt of coreExtensions) {
-      // Check if this core extension already exists in state
-      const existing = existingCoreExtensions.find((ext) => ext.id === coreExt.id);
-
-      if (existing) {
-        // Preserve user's enabled/disabled preference, but update other metadata
-        syncedCoreExtensions.push({
-          ...coreExt,
-          enabled: existing.enabled, // Preserve user preference
-        });
-      } else {
-        // New core extension - add it with default enabled state from config
-        syncedCoreExtensions.push(coreExt);
+    const isBundledLocally = (pluginId: string): boolean => {
+      if (app.isPackaged) {
+        return existsSync(path.join(process.resourcesPath, "bundled-plugins", `${pluginId}.js`));
       }
-    }
+      return existsSync(path.join(app.getAppPath(), "bundled-plugins", `${pluginId}.js`));
+    };
 
-    // Replace core extensions in state with synced versions
+    const isOtaCached = (pluginId: string): boolean => {
+      const cacheDir = coreCacheDir();
+      try {
+        const manifest = JSON.parse(readFileSync(path.join(cacheDir, "manifest.json"), "utf8"));
+        const entry = manifest?.plugins?.[pluginId];
+        if (!entry) return false;
+        return existsSync(path.join(cacheDir, pluginId, `${entry.version}.js`));
+      } catch {
+        return false;
+      }
+    };
+
+    const getOtaCachedVersion = (pluginId: string): string | null => {
+      const cacheDir = coreCacheDir();
+      try {
+        const manifest = JSON.parse(readFileSync(path.join(cacheDir, "manifest.json"), "utf8"));
+        return manifest?.plugins?.[pluginId]?.version ?? null;
+      } catch {
+        return null;
+      }
+    };
+
+    const syncedCoreExtensions: ExtensionData[] = coreExtensions.map((coreExt) => {
+      const installed = isBundledLocally(coreExt.id) || isOtaCached(coreExt.id);
+      // Priority: OTA-installed version > remote registry version (for "available to install" display) > local snapshot fallback
+      const effectiveVersion = getOtaCachedVersion(coreExt.id) ?? remoteVersions.get(coreExt.id) ?? coreExt.version;
+      return {
+        ...coreExt,
+        version: effectiveVersion,
+        // Enabled = installed AND not explicitly disabled by user.
+        // This is window-independent: reads from plugins/core-disabled.json, not from window state.
+        enabled: installed && !disabled.has(coreExt.id),
+        isLocallyAvailable: installed,
+      };
+    });
+
+    // Append plugins that exist in the remote registry but not in the local snapshot.
+    // These are OTA-only new plugins the user can install but haven't been bundled yet.
+    const existingIds = new Set(syncedCoreExtensions.map((e) => e.id));
+    const newRemoteExtensions: ExtensionData[] = remoteNewPlugins
+      .filter((p) => !existingIds.has(p.id))
+      .map((p) => {
+        const locallyAvailable = isBundledLocally(p.id) || isOtaCached(p.id);
+        return {
+          ...p,
+          version: remoteVersions.get(p.id) ?? p.version,
+          enabled: locallyAvailable && !disabled.has(p.id),
+          isLocallyAvailable: locallyAvailable,
+        };
+      });
+
     this.store.extensions = [
       ...syncedCoreExtensions,
+      ...newRemoteExtensions,
       ...this.store.extensions.filter((ext) => ext.type !== "core"),
     ];
   }
 
+  /** Disable a core plugin and delete its OTA cache (user-initiated uninstall from Extension Browser). */
+  async uninstallCoreExtension(pluginId: string): Promise<void> {
+    const disabled = readDisabledCorePluginsSync();
+    disabled.add(pluginId);
+    await saveDisabledCorePlugins(disabled);
+    this.syncCoreExtensions();
+
+    const cacheDir = coreCacheDir();
+    const pluginCacheDir = path.join(cacheDir, pluginId);
+    if (existsSync(pluginCacheDir)) {
+      await fs.rm(pluginCacheDir, { recursive: true, force: true });
+      const manifestPath = path.join(cacheDir, "manifest.json");
+      try {
+        const cached = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+        delete cached.plugins[pluginId];
+        await fs.writeFile(manifestPath, JSON.stringify(cached, null, 2));
+      } catch { /* ignore */ }
+    }
+  }
+
+  /** Re-enable a previously uninstalled core plugin. */
+  async reinstallCoreExtension(pluginId: string): Promise<void> {
+    const disabled = readDisabledCorePluginsSync();
+    disabled.delete(pluginId);
+    await saveDisabledCorePlugins(disabled);
+    this.syncCoreExtensions();
+  }
+
   async saveInstalledCommunityExtensions(): Promise<void> {
     const communityExtensions = this.store.extensions.filter((ext) => ext.type === "community");
-    await fs.mkdir(communityDir, { recursive: true });
-    await fs.writeFile(path.join(communityDir, "installed.json"), JSON.stringify(communityExtensions), "utf8");
+    await fs.mkdir(communityDir(), { recursive: true });
+    await fs.writeFile(path.join(communityDir(), "installed.json"), JSON.stringify(communityExtensions), "utf8");
+  }
+
+  /**
+   * Update metadata for a single core extension in the in-memory store.
+   * Called after an OTA bundle loads and exposes __voiden_manifest__.
+   * Only patches safe fields — id, type, and enabled are never overwritten.
+   */
+  updateCoreExtensionMeta(pluginId: string, meta: Record<string, any>): void {
+    const ext = this.store.extensions.find((e) => e.id === pluginId && e.type === "core");
+    if (!ext) return;
+    const { id, type, enabled, ...rest } = meta; // strip protected fields
+    Object.assign(ext, rest);
   }
 
   async getAllExtensions(): Promise<ExtensionData[]> {
@@ -118,16 +218,27 @@ export class ExtensionManager {
     const allExtensions = [...this.store.extensions, ...remoteExtensions].filter(
       (ext, index, self) => self.findIndex((t) => t.id === ext.id) === index,
     );
-    return allExtensions;
+    // Attach latestVersion if remote version differs and is compatible with the running app
+    const appVersion = app.getVersion();
+    return allExtensions.map((ext) => {
+      const remoteExt = remoteExtensions.find((r) => r.id === ext.id);
+      if (remoteExt && remoteExt.version !== ext.version) {
+        const voidenVersion = remoteExt.voidenVersion;
+        const compatible = voidenVersion ? satisfiesVersionRange(appVersion, voidenVersion) : true;
+        if (compatible) return { ...ext, latestVersion: remoteExt.version };
+        return { ...ext, incompatibleLatestVersion: remoteExt.version, requiredVoidenVersion: voidenVersion };
+      }
+      return ext;
+    });
   }
 
   async installCommunityExtension(extension: ExtensionData): Promise<ExtensionData> {
     if (!extension.repo) {
       throw new Error("repo not defined");
     }
-    const { manifest, main, skill } = await installer.getExtensionFiles(extension.repo, extension.version);
+    const { manifest, main, skill, mainProcess } = await installer.getExtensionFiles(extension.repo, extension.version);
     const prepared = installer.prepareExtensionMain(main);
-    const installPath = path.join(communityDir, extension.id);
+    const installPath = path.join(communityDir(), extension.id);
     await fs.mkdir(installPath, { recursive: true });
     await fs.writeFile(path.join(installPath, "manifest.json"), manifest, "utf8");
     await fs.writeFile(path.join(installPath, "main.js"), prepared.main, "utf8");
@@ -138,6 +249,9 @@ export class ExtensionManager {
     );
     if (skill) {
       await fs.writeFile(path.join(installPath, "skill.md"), skill, "utf8");
+    }
+    if (mainProcess) {
+      await fs.writeFile(path.join(installPath, "main-process.js"), mainProcess, "utf8");
     }
 
     // Parse the downloaded manifest to extract rich metadata
@@ -157,6 +271,8 @@ export class ExtensionManager {
       capabilities: manifestData.capabilities || extension.capabilities,
       features: manifestData.features || extension.features,
       dependencies: manifestData.dependencies || extension.dependencies,
+      mainProcess: manifestData.mainProcess ?? !!mainProcess,
+      permissions: manifestData.permissions ?? [],
     };
 
     const index = this.store.extensions.findIndex((ext) => ext.id === installed.id);
@@ -170,20 +286,32 @@ export class ExtensionManager {
   }
 
   async uninstallCommunityExtension(extensionId: string): Promise<void> {
-    const ext = this.store.extensions.find((ext) => ext.id === extensionId);
-    if (ext && ext.installedPath) {
+    const idx = this.store.extensions.findIndex((ext) => ext.id === extensionId);
+    if (idx < 0) return;
+    const ext = this.store.extensions[idx];
+    if (ext.installedPath) {
       await fs.rm(ext.installedPath, { recursive: true, force: true });
-      // remove extension from centralized appState
-      this.store.extensions = this.store.extensions.filter((ext) => ext.id !== extensionId);
-      await this.saveInstalledCommunityExtensions();
     }
+    // Keep extension in store as "not installed" so it stays visible in Extension Browser.
+    // UI shows "Install" button when installedPath is falsy.
+    this.store.extensions[idx] = { ...ext, installedPath: undefined, enabled: false };
+    await this.saveInstalledCommunityExtensions();
   }
 
   async setExtensionEnabled(extensionId: string, enabled: boolean): Promise<void> {
     const ext = this.store.extensions.find((ext) => ext.id === extensionId);
     if (!ext) throw new Error("extension not found");
     ext.enabled = enabled;
-    if (ext.type === "community") {
+    if (ext.type === "core") {
+      // Persist enabled state globally (shared across windows) in plugins/core-disabled.json.
+      const disabled = readDisabledCorePluginsSync();
+      if (!enabled) {
+        disabled.add(extensionId);
+      } else {
+        disabled.delete(extensionId);
+      }
+      await saveDisabledCorePlugins(disabled);
+    } else if (ext.type === "community") {
       await this.saveInstalledCommunityExtensions();
     }
   }
@@ -247,7 +375,7 @@ export class ExtensionManager {
     }
 
     // Extract manifest.json and main.js to the community extensions directory
-    const installPath = path.join(communityDir, manifest.id);
+    const installPath = path.join(communityDir(), manifest.id);
     await fs.mkdir(installPath, { recursive: true });
 
     await fs.writeFile(path.join(installPath, "manifest.json"), manifestEntry.getData());
@@ -268,6 +396,19 @@ export class ExtensionManager {
       await fs.writeFile(path.join(installPath, "skill.md"), skillEntry.getData().toString("utf8"), "utf8");
     }
 
+    // Extract main-process bundle if present — named {pluginId}-main.js by convention
+    const mainProcessEntry = entries.find((e) => {
+      const name = e.entryName.startsWith(prefix) ? e.entryName.slice(prefix.length) : e.entryName;
+      return name.endsWith("-main.js") && name !== "main.js";
+    });
+    if (mainProcessEntry) {
+      await fs.writeFile(
+        path.join(installPath, "main-process.js"),
+        mainProcessEntry.getData().toString("utf8"),
+        "utf8",
+      );
+    }
+
     // Build ExtensionData
     const extension: ExtensionData = {
       id: manifest.id,
@@ -282,6 +423,8 @@ export class ExtensionManager {
       capabilities: manifest.capabilities,
       features: manifest.features,
       dependencies: manifest.dependencies,
+      mainProcess: manifest.mainProcess ?? !!mainProcessEntry,
+      permissions: manifest.permissions ?? [],
     };
 
     // Add or update in store
