@@ -9,7 +9,7 @@
     "prepare": "node -e \"try { require('husky').install() } catch (e) {if (e.code !== 'MODULE_NOT_FOUND') throw e}\"",
     "dev:shared": "npx tsc -p apps/shared --watch",
     "dev": "npx tsc -p apps/backend && node --env-file=.env apps/backend/dist/index.js",
-    "setup:plugins": "bash scripts/setup-plugins.sh",
+    "setup:plugins": "bash cleanup.sh",
     "dev:plugins": "node scripts/build-plugins.mjs --dev",
     "dev:plugin": "node -e \"const [,,p]=process.argv; require('child_process').execSync('node scripts/build-plugins.mjs '+p+' --dev',{stdio:'inherit'})\"",
     "dev:plugins:watch": "node scripts/build-plugins.mjs --dev --watch",

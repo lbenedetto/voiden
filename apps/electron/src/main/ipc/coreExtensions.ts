@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import { existsSync, watch, readFileSync } from 'node:fs'
 import { coreExtensions, fetchAndUpdateCoreRegistry, remoteVersions, remoteVoidenVersions } from '../config/coreExtensions'
 import { getMainProcessExtensionResults } from '../extensionLoader'
-import { coreCacheDir, githubCachePath } from '../extension/paths'
+import { coreCacheDir, githubCachePath, coreUninstalledPath } from '../extension/paths'
 
 // builtInRegistry reflects what's actually loaded (remote if fetched, otherwise local fallback)
 const builtInRegistry = {
@@ -79,7 +79,6 @@ export function semverGt(a: string, b: string): boolean {
 
 /** Parse a semver range like ">=2.0.0" and check if appVersion satisfies it. */
 export function satisfiesVersionRange(appVersion: string, range: string): boolean {
-  const isPreRelease = (v: string) => /[-+]/.test(v.trim())
   const clean = (v: string) => v.replace(/[-+].*$/, '').trim()
   const parseVer = (v: string) => clean(v).split('.').map((n) => parseInt(n, 10) || 0)
   const cmp = (a: number[], b: number[]): number => {
@@ -88,16 +87,14 @@ export function satisfiesVersionRange(appVersion: string, range: string): boolea
     }
     return 0
   }
+  // Strip pre-release suffix: 2.0.0-beta.1 satisfies >=2.0.0 because the app is on that major version
   const appVer = parseVer(appVersion)
-  const appIsPreRelease = isPreRelease(appVersion)
   for (const part of range.trim().split(/\s+/)) {
     const match = part.match(/^(>=|<=|>|<|=|~\^?)(.+)$/)
     if (!match) continue
     const [, op, ver] = match
     const target = parseVer(ver)
-    let diff = cmp(appVer, target)
-    // In semver, 2.0.0-beta.1 < 2.0.0 — treat pre-release as slightly less when base versions match
-    if (diff === 0 && appIsPreRelease && !isPreRelease(ver)) diff = -1
+    const diff = cmp(appVer, target)
     if (op === '>=' && diff < 0) return false
     if (op === '>' && diff <= 0) return false
     if (op === '<=' && diff > 0) return false
@@ -246,7 +243,7 @@ async function fetchJson(url: string, useCache = true): Promise<any> {
     };
 
     if (cached?.etag) {
-      options.headers!['If-None-Match'] = cached.etag
+      (options.headers as Record<string, string>)['If-None-Match'] = cached.etag
     }
 
     https.get(url, options, (res) => {
@@ -294,7 +291,7 @@ async function fetchJson(url: string, useCache = true): Promise<any> {
 
           resolve(parsed);
         } catch (e) {
-          reject(new Error(`Failed to parse JSON from ${url}: ${e.message}`));
+          reject(new Error(`Failed to parse JSON from ${url}: ${e instanceof Error ? e.message : String(e)}`));
         }
       });
     }).on('error', (err) => {
@@ -398,6 +395,8 @@ async function fetchPluginReleaseInfoDirect(repo: string, pluginId: string): Pro
 }
 
 let cachedRegistry: Record<string, RegistryPlugin> | null = null
+let lastRegistryFetchAt = 0
+const REGISTRY_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
 async function fetchRegistry(): Promise<Record<string, RegistryPlugin>> {
   if (cachedRegistry) return cachedRegistry
@@ -468,9 +467,13 @@ export function registerCoreExtensionsIpcHandlers(): void {
     try {
       const appVersion = app.getVersion()
 
-      // Always re-fetch so the check reflects the current state of the registry,
-      // not the stale in-memory snapshot from app startup.
-      await fetchAndUpdateCoreRegistry()
+      // Re-fetch registry only when data is stale (>5 min old) or not yet loaded.
+      // This prevents a slow GitHub round-trip on every manual "Check Update" click.
+      const now = Date.now()
+      if (remoteVersions.size === 0 || now - lastRegistryFetchAt > REGISTRY_TTL_MS) {
+        await fetchAndUpdateCoreRegistry()
+        lastRegistryFetchAt = now
+      }
 
       const localManifest = await readLocalManifest()
 
@@ -488,9 +491,10 @@ export function registerCoreExtensionsIpcHandlers(): void {
         const cachedVersion = localManifest?.plugins?.[ext.id]?.version ?? null
         const builtInVersion = builtInRegistry.plugins[ext.id]?.version ?? null
         const effectiveVersion = cachedVersion ?? builtInVersion
-        // Only flag an update when the plugin is actually cached/installed — comparing against
-        // builtInVersion (local snapshot) would show a false badge for uninstalled plugins.
-        const hasUpdate = !!cachedVersion && semverGt(remoteVersion, cachedVersion)
+        // Flag an update/incompatible badge whenever we have any local version to compare against
+        // (OTA-cached or bundled). Using only cachedVersion hides the badge for plugins running
+        // from their bundled file after an uninstall/reinstall cycle.
+        const hasUpdate = !!effectiveVersion && semverGt(remoteVersion, effectiveVersion)
 
         console.log(`[CoreExtensions]   ${ext.id}: cached=${cachedVersion ?? 'none'} effective=${effectiveVersion ?? 'none'} remote=${remoteVersion} hasUpdate=${hasUpdate} compatible=${compatible}`)
 
@@ -587,19 +591,31 @@ export function registerCoreExtensionsIpcHandlers(): void {
     return result
   })
 
-  /** Delete the OTA-cached bundle for a core plugin. */
+  /** Delete the OTA-cached bundle for a core plugin and mark it as user-uninstalled. */
   ipcMain.handle('coreExtensions:deleteCache', async (_event, pluginId: string): Promise<void> => {
     const cacheDir = getCacheDir()
-    const cached = await readLocalManifest()
-    if (!cached) return
+    // Mark as uninstalled so bundled plugins also show the Install button after removal.
     try {
-      await fs.rm(path.join(cacheDir, pluginId), { recursive: true, force: true })
-      delete cached.plugins[pluginId]
-      await writeLocalManifest(cached)
-      // Refresh state so isLocallyAvailable becomes false immediately
+      const raw = readFileSync(coreUninstalledPath(), 'utf8')
+      const ids: string[] = JSON.parse(raw)
+      if (!ids.includes(pluginId)) ids.push(pluginId)
+      await fs.writeFile(coreUninstalledPath(), JSON.stringify(ids, null, 2))
+    } catch {
+      await fs.writeFile(coreUninstalledPath(), JSON.stringify([pluginId], null, 2))
+    }
+    const cached = await readLocalManifest()
+    if (cached) {
+      try {
+        await fs.rm(path.join(cacheDir, pluginId), { recursive: true, force: true })
+        delete cached.plugins[pluginId]
+        await writeLocalManifest(cached)
+      } catch { /* silently ignore */ }
+    }
+    // Refresh state so isLocallyAvailable becomes false immediately
+    try {
       const { extensionManager } = await import('../state')
       if (extensionManager) extensionManager.syncCoreExtensions()
-    } catch { /* silently ignore */ }
+    } catch { /* state may not be ready */ }
   })
 
   /** Relaunch the Electron app. */
@@ -662,6 +678,7 @@ export function registerCoreExtensionsIpcHandlers(): void {
     updated: string[]
     upToDate: boolean
     incompatible: string[]
+    incompatibleVersions: { [id: string]: { version: string; requiredVoidenVersion: string } }
     error?: string
   }> => {
     try {
@@ -676,11 +693,12 @@ export function registerCoreExtensionsIpcHandlers(): void {
       const pluginsToCheck = Object.values(registry).filter((p) => p.repo && (!pluginId || p.id === pluginId))
 
       if (pluginId && pluginsToCheck.length === 0) {
-        return { updated: [], upToDate: true, incompatible: [], error: `Plugin ${pluginId} not found in registry` }
+        return { updated: [], upToDate: true, incompatible: [], incompatibleVersions: {}, error: `Plugin ${pluginId} not found in registry` }
       }
 
       const updated: string[] = []
       const incompatible: string[] = []
+      const incompatibleVersions: { [id: string]: { version: string; requiredVoidenVersion: string } } = {}
 
       // Fetch release info for all target plugins in parallel.
       // Uses direct /releases/latest/download/ URLs — no GitHub API, no rate limits.
@@ -694,7 +712,7 @@ export function registerCoreExtensionsIpcHandlers(): void {
       for (const result of results) {
         if (result.status === 'rejected') {
           if (pluginId) {
-            return { updated: [], upToDate: false, incompatible: [], error: result.reason instanceof Error ? result.reason.message : String(result.reason) }
+            return { updated: [], upToDate: false, incompatible: [], incompatibleVersions: {}, error: result.reason instanceof Error ? result.reason.message : String(result.reason) }
           }
           continue
         }
@@ -703,10 +721,11 @@ export function registerCoreExtensionsIpcHandlers(): void {
         const remoteVersion = info.manifest.version
         const voidenVersion = info.manifest.voidenVersion ?? plugin.voidenVersion
 
-        // Skip incompatible plugins
+        // Skip incompatible plugins — record version details so the UI can show a badge
         if (voidenVersion && !satisfiesVersionRange(appVersion, voidenVersion)) {
           console.log(`[CoreExtensions] Skipping ${id} — requires ${voidenVersion}, app is ${appVersion}`)
           incompatible.push(id)
+          incompatibleVersions[id] = { version: remoteVersion, requiredVoidenVersion: voidenVersion }
           continue
         }
 
@@ -718,7 +737,7 @@ export function registerCoreExtensionsIpcHandlers(): void {
         if (!info.jsAsset) {
           console.warn(`[CoreExtensions] No .js asset found for ${id} in release ${info.tagName} — skipping`)
           if (pluginId && id === pluginId) {
-            return { updated: [], upToDate: false, incompatible: [], error: `Release ${info.tagName} for ${id} is missing a .js bundle. Please contact the plugin author.` }
+            return { updated: [], upToDate: false, incompatible: [], incompatibleVersions: {}, error: `Release ${info.tagName} for ${id} is missing a .js bundle. Please contact the plugin author.` }
           }
           continue
         }
@@ -800,7 +819,7 @@ export function registerCoreExtensionsIpcHandlers(): void {
           const { reloadMainProcessExtension } = await import('../extensionLoader')
           const appState = getAppState()
           for (const id of updated) {
-            const ext = appState?.extensions.find((e) => e.id === id)
+            const ext = appState?.extensions.find((ext: { id: string }) => ext.id === id)
             if (ext) {
               reloadMainProcessExtension(ext).catch((err) =>
                 console.warn(`[CoreExtensions] Failed to reload main-process for ${id}:`, err)
@@ -810,11 +829,11 @@ export function registerCoreExtensionsIpcHandlers(): void {
         } catch { /* state may not be ready yet on first install */ }
       }
 
-      return { updated, upToDate: updated.length === 0, incompatible }
+      return { updated, upToDate: updated.length === 0, incompatible, incompatibleVersions }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.error('[CoreExtensions] checkAndUpdate failed:', message)
-      return { updated: [], upToDate: true, incompatible: [], error: message }
+      return { updated: [], upToDate: true, incompatible: [], incompatibleVersions: {}, error: message }
     }
   })
 }

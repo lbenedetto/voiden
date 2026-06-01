@@ -126,7 +126,7 @@ export async function fetchAndUpdateCoreRegistry(): Promise<void> {
 let _snapshot: any = [];
 try {
   const possiblePaths = [
-    // Dev: local registry clone populated by setup-plugins.sh (always freshest in dev)
+    // Dev: local registry clone populated by cleanup.sh (always freshest in dev)
     join(app.getAppPath(), '..', '..', 'plugins', 'plugin-registry', 'extensions.json'),
     // Dev: snapshot synced via yarn registry:sync
     join(app.getAppPath(), 'src', 'extensions.json'),

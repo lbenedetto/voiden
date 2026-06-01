@@ -18,9 +18,9 @@ import { toast } from "@/core/components/ui/sonner";
 import { Tip } from "@/core/components/ui/Tip";
 import logo from "@/assets/logo-dark.png";
 
-// Module-level timestamp — survives component unmount/remount.
-// Stores when the registry was last fetched so the refresh button can reset it.
+// Module-level timestamps — survive component unmount/remount.
 let _lastRegistryFetch = 0;
+let _lastUpdateCheck = 0;
 
 const ExtensionIcon = ({ extension, size = "md" }: { extension: Extension; size?: "sm" | "md" }) => {
   const dim = size === "sm" ? "w-8 h-8" : "w-10 h-10";
@@ -55,6 +55,7 @@ const ExtensionItem = ({ extension }: { extension: Extension }) => {
   const toggleEnabledMutation = useSetExtensionEnabled();
   const openExtensionDetailsMutation = useOpenExtensionDetails();
   const updateMutation = useUpdateExtension();
+  const queryClient = useQueryClient();
   const { pluginErrors, coreUpdateInfo, installingCorePlugins, setInstallingPlugin, setCoreUpdateInfo } = usePluginStore();
 
   const error = pluginErrors.find((err) => err.extensionId === extension.id);
@@ -86,6 +87,10 @@ const ExtensionItem = ({ extension }: { extension: Extension }) => {
   const handleInstallCore = async (e: React.MouseEvent) => {
     e.stopPropagation();
     const coreExtApi = (window as any).electron?.coreExtensions;
+    const activateBundled = async () => {
+      await (window as any).electron?.extensions.reinstallCore?.(extension.id);
+      await queryClient.invalidateQueries({ queryKey: ["extensions"] });
+    };
     setInstallingPlugin(extension.id, true);
     try {
       const result = await coreExtApi?.checkAndUpdate?.(extension.id);
@@ -93,13 +98,43 @@ const ExtensionItem = ({ extension }: { extension: Extension }) => {
         await toggleEnabledMutation.mutateAsync({ extensionId: extension.id, enabled: true });
         setInstallingPlugin(extension.id, false);
         toast.success(`${extension.name} installed.`);
-      } else if (result?.error) {
-        setInstallingPlugin(extension.id, false);
-        toast.error(`Could not install ${extension.name}: ${result.error}`);
-      } else {
-        setInstallingPlugin(extension.id, false);
-        toast.error(`Could not download ${extension.name}. Check your connection.`);
+        return;
       }
+      if (result?.incompatible?.includes(extension.id)) {
+        await activateBundled();
+        const details = result.incompatibleVersions?.[extension.id];
+        if (details) {
+          queryClient.setQueryData<any[]>(["extensions"], (old) =>
+            old?.map((e: any) =>
+              e.id === extension.id
+                ? { ...e, incompatibleLatestVersion: details.version, requiredVoidenVersion: details.requiredVoidenVersion }
+                : e
+            ) ?? old
+          );
+        }
+        setInstallingPlugin(extension.id, false);
+        const fresh = queryClient.getQueryData<any[]>(["extensions"])?.find((e: any) => e.id === extension.id);
+        if (fresh?.isLocallyAvailable) {
+          toast.warning(`Latest version requires a newer Voiden. Enabled bundled version.`);
+        } else {
+          toast.error(`${extension.name} requires a newer Voiden. Update the app to install.`);
+        }
+        return;
+      }
+      if (result?.error) {
+        await activateBundled();
+        setInstallingPlugin(extension.id, false);
+        const fresh = queryClient.getQueryData<any[]>(["extensions"])?.find((e: any) => e.id === extension.id);
+        if (fresh?.isLocallyAvailable) {
+          toast.warning(`Could not reach server. Enabled bundled version of ${extension.name}.`);
+        } else {
+          toast.error(`Could not download ${extension.name}. Check your connection.`);
+        }
+        return;
+      }
+      // upToDate — remote version matches bundled, activate the bundled copy.
+      await activateBundled();
+      setInstallingPlugin(extension.id, false);
     } catch {
       setInstallingPlugin(extension.id, false);
       toast.error(`Install failed unexpectedly.`);
@@ -291,14 +326,14 @@ const ExtensionItem = ({ extension }: { extension: Extension }) => {
               <span className={cn("text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border", typeBadgeClass)}>
                 {typeLabel}
               </span>
-              {extension.latestVersion && (
+              {(extension.latestVersion || hasCompatibleUpdate) && (
                 <span className="text-[10px] px-1.5 py-0.5 rounded border border-blue-500/20 text-blue-300 bg-blue-500/10">
                   Update available
                 </span>
               )}
-              {extension.incompatibleLatestVersion && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded border border-amber-500/20 text-amber-300 bg-amber-500/10">
-                  v{extension.incompatibleLatestVersion} — needs Voiden {extension.requiredVoidenVersion}
+              {(extension.incompatibleLatestVersion || hasIncompatibleUpdate) && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded border border-border text-accent bg-bg">
+                  v{updateInfo?.remoteVersion ?? extension.incompatibleLatestVersion} — needs Voiden {updateInfo?.requiredAppVersion ?? extension.requiredVoidenVersion}
                 </span>
               )}
             </div>
@@ -344,9 +379,9 @@ const ExtensionItem = ({ extension }: { extension: Extension }) => {
             <span className="w-2 h-2 rounded-full bg-blue-400 flex-shrink-0 cursor-default" />
           </Tip>
         )}
-        {hasIncompatibleUpdate && coreIsLocallyAvailable && (
+        {hasIncompatibleUpdate && (
           <Tip label={`v${updateInfo?.remoteVersion} requires Voiden ${updateInfo?.requiredAppVersion}`} side="bottom" align="end">
-            <span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0 cursor-default" />
+            <span className="w-2 h-2 rounded-full bg-comment/50 flex-shrink-0 cursor-default" />
           </Tip>
         )}
         {renderActions()}
@@ -354,11 +389,15 @@ const ExtensionItem = ({ extension }: { extension: Extension }) => {
 
       {/* Bottom-right — Install / Update / enabled dot */}
       <div className="absolute bottom-2 right-2 flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-        {/* Core: not installed → Install */}
+        {/* Core: not installed → Install (disabled when incompatible) */}
         {extension.type === "core" && !coreIsLocallyAvailable && (
           installingCorePlugins?.[extension.id] ? (
             <button disabled className="px-2 py-0.5 text-[10px] bg-button-primary/40 text-bg/60 rounded flex items-center gap-1 cursor-not-allowed">
               <Loader2 size={10} className="animate-spin" /> Installing
+            </button>
+          ) : (extension.incompatibleLatestVersion || hasIncompatibleUpdate) ? (
+            <button disabled className="px-2 py-0.5 text-[10px] bg-active/40 text-comment rounded cursor-not-allowed border border-border">
+              Install
             </button>
           ) : (
             <button onClick={handleInstallCore} className="px-2 py-0.5 text-[10px] bg-button-primary hover:bg-button-primary-hover text-bg rounded font-medium transition-colors">
@@ -471,7 +510,7 @@ export const ExtensionBrowser = () => {
   const { data: extensions, isLoading } = useGetExtensions();
   const queryClient = useQueryClient();
   const installFromZip = useInstallExtensionFromZip();
-  const { coreUpdateInfo } = usePluginStore();
+  const { coreUpdateInfo, setCoreUpdateInfo } = usePluginStore();
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<"all" | "core" | "community" | "installed" | "updates">("all");
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -493,10 +532,29 @@ export const ExtensionBrowser = () => {
     }
   };
 
-  // Auto-fetch once per session on first open
+  const doCheckUpdates = async () => {
+    const coreExt = (window as any).electron?.coreExtensions;
+    if (!coreExt?.checkForUpdates) return;
+    try {
+      const result = await coreExt.checkForUpdates();
+      if (result?.plugins?.length) {
+        setCoreUpdateInfo(result.plugins);
+        _lastUpdateCheck = Date.now();
+      }
+    } catch { /* silently ignore — no network */ }
+  };
+
+  // Auto-fetch registry once per session on first open
   useEffect(() => {
     if (_lastRegistryFetch > 0) return;
     doFetchRegistry();
+  }, []);
+
+  // Auto-check for updates once per session on first open so incompatible/update badges
+  // are always visible without requiring a manual "Check Update" click.
+  useEffect(() => {
+    if (_lastUpdateCheck > 0) return;
+    doCheckUpdates();
   }, []);
 
   useEffect(() => {

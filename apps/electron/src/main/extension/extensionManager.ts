@@ -10,7 +10,7 @@ import { coreExtensions, remoteVersions, remoteNewPlugins } from "../config/core
 import { satisfiesVersionRange } from "../ipc/coreExtensions";
 import AdmZip from "adm-zip";
 
-import { coreCacheDir, communityDir, coreDisabledPath } from './paths';
+import { coreCacheDir, communityDir, coreDisabledPath, coreUninstalledPath } from './paths';
 
 function readDisabledCorePluginsSync(): Set<string> {
   try {
@@ -23,6 +23,19 @@ function readDisabledCorePluginsSync(): Set<string> {
 
 async function saveDisabledCorePlugins(ids: Set<string>): Promise<void> {
   await fs.writeFile(coreDisabledPath(), JSON.stringify([...ids], null, 2));
+}
+
+function readUninstalledCorePluginsSync(): Set<string> {
+  try {
+    const raw = require("fs").readFileSync(coreUninstalledPath(), "utf8");
+    return new Set(JSON.parse(raw));
+  } catch {
+    return new Set();
+  }
+}
+
+async function saveUninstalledCorePlugins(ids: Set<string>): Promise<void> {
+  await fs.writeFile(coreUninstalledPath(), JSON.stringify([...ids], null, 2));
 }
 
 export class ExtensionManager {
@@ -98,7 +111,10 @@ export class ExtensionManager {
   syncCoreExtensions(): void {
     // Enabled state is global (shared across windows), not per-window.
     // A plugin is enabled by default if it is installed; explicit disable is tracked in plugins/core-disabled.json.
+    // User-initiated uninstalls are tracked separately in plugins/core-uninstalled.json so that bundled
+    // plugins (which always have a local file) still show an Install button after the user removes them.
     const disabled = readDisabledCorePluginsSync();
+    const uninstalled = readUninstalledCorePluginsSync();
 
     const isBundledLocally = (pluginId: string): boolean => {
       if (app.isPackaged) {
@@ -130,16 +146,20 @@ export class ExtensionManager {
     };
 
     const syncedCoreExtensions: ExtensionData[] = coreExtensions.map((coreExt) => {
-      const installed = isBundledLocally(coreExt.id) || isOtaCached(coreExt.id);
+      // A plugin is "locally available" only when it has a file to load AND the user hasn't
+      // explicitly uninstalled it. Uninstalled bundled plugins still have their bundled file
+      // on disk, but we treat them as unavailable so the UI shows an Install button.
+      const hasFile = isBundledLocally(coreExt.id) || isOtaCached(coreExt.id);
+      const isLocallyAvailable = hasFile && !uninstalled.has(coreExt.id);
       // Priority: OTA-installed version > remote registry version (for "available to install" display) > local snapshot fallback
       const effectiveVersion = getOtaCachedVersion(coreExt.id) ?? remoteVersions.get(coreExt.id) ?? coreExt.version;
       return {
         ...coreExt,
         version: effectiveVersion,
-        // Enabled = installed AND not explicitly disabled by user.
+        // Enabled = locally available AND not explicitly disabled by user.
         // This is window-independent: reads from plugins/core-disabled.json, not from window state.
-        enabled: installed && !disabled.has(coreExt.id),
-        isLocallyAvailable: installed,
+        enabled: isLocallyAvailable && !disabled.has(coreExt.id),
+        isLocallyAvailable,
       };
     });
 
@@ -149,7 +169,8 @@ export class ExtensionManager {
     const newRemoteExtensions: ExtensionData[] = remoteNewPlugins
       .filter((p) => !existingIds.has(p.id))
       .map((p) => {
-        const locallyAvailable = isBundledLocally(p.id) || isOtaCached(p.id);
+        const hasFile = isBundledLocally(p.id) || isOtaCached(p.id);
+        const locallyAvailable = hasFile && !uninstalled.has(p.id);
         return {
           ...p,
           version: remoteVersions.get(p.id) ?? p.version,
@@ -165,31 +186,43 @@ export class ExtensionManager {
     ];
   }
 
-  /** Disable a core plugin and delete its OTA cache (user-initiated uninstall from Extension Browser). */
+  /** Mark a core plugin as uninstalled and wipe all local state for it. */
   async uninstallCoreExtension(pluginId: string): Promise<void> {
+    // Clear disabled state — the plugin is gone, not just toggled off.
     const disabled = readDisabledCorePluginsSync();
-    disabled.add(pluginId);
+    disabled.delete(pluginId);
     await saveDisabledCorePlugins(disabled);
+
+    // Track as explicitly uninstalled so bundled plugins show Install button (not Enable).
+    const uninstalled = readUninstalledCorePluginsSync();
+    uninstalled.add(pluginId);
+    await saveUninstalledCorePlugins(uninstalled);
     this.syncCoreExtensions();
 
+    // Delete OTA cache files and remove the version entry from the local manifest.
     const cacheDir = coreCacheDir();
     const pluginCacheDir = path.join(cacheDir, pluginId);
     if (existsSync(pluginCacheDir)) {
       await fs.rm(pluginCacheDir, { recursive: true, force: true });
-      const manifestPath = path.join(cacheDir, "manifest.json");
-      try {
-        const cached = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    }
+    const manifestPath = path.join(cacheDir, "manifest.json");
+    try {
+      const cached = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+      if (cached.plugins?.[pluginId]) {
         delete cached.plugins[pluginId];
         await fs.writeFile(manifestPath, JSON.stringify(cached, null, 2));
-      } catch { /* ignore */ }
-    }
+      }
+    } catch { /* manifest may not exist yet — ignore */ }
   }
 
-  /** Re-enable a previously uninstalled core plugin. */
+  /** Re-enable a previously uninstalled core plugin. Clears both disabled and uninstalled state. */
   async reinstallCoreExtension(pluginId: string): Promise<void> {
     const disabled = readDisabledCorePluginsSync();
     disabled.delete(pluginId);
     await saveDisabledCorePlugins(disabled);
+    const uninstalled = readUninstalledCorePluginsSync();
+    uninstalled.delete(pluginId);
+    await saveUninstalledCorePlugins(uninstalled);
     this.syncCoreExtensions();
   }
 
@@ -218,15 +251,21 @@ export class ExtensionManager {
     const allExtensions = [...this.store.extensions, ...remoteExtensions].filter(
       (ext, index, self) => self.findIndex((t) => t.id === ext.id) === index,
     );
-    // Attach latestVersion if remote version differs and is compatible with the running app
+    // Attach latestVersion / incompatibleLatestVersion based on version and voidenVersion checks
     const appVersion = app.getVersion();
     return allExtensions.map((ext) => {
+      // Community: compare installed version against live registry version
       const remoteExt = remoteExtensions.find((r) => r.id === ext.id);
       if (remoteExt && remoteExt.version !== ext.version) {
         const voidenVersion = remoteExt.voidenVersion;
         const compatible = voidenVersion ? satisfiesVersionRange(appVersion, voidenVersion) : true;
         if (compatible) return { ...ext, latestVersion: remoteExt.version };
         return { ...ext, incompatibleLatestVersion: remoteExt.version, requiredVoidenVersion: voidenVersion };
+      }
+      // Core: check whether the registry voidenVersion is satisfied by the running app.
+      // This surfaces an incompatible badge at page-load without requiring the user to click Install.
+      if (ext.type === "core" && ext.voidenVersion && !satisfiesVersionRange(appVersion, ext.voidenVersion)) {
+        return { ...ext, incompatibleLatestVersion: ext.version, requiredVoidenVersion: ext.voidenVersion };
       }
       return ext;
     });
@@ -309,6 +348,12 @@ export class ExtensionManager {
         disabled.add(extensionId);
       } else {
         disabled.delete(extensionId);
+        // Enabling always clears the uninstalled marker so the plugin becomes locally available again.
+        const uninstalled = readUninstalledCorePluginsSync();
+        if (uninstalled.has(extensionId)) {
+          uninstalled.delete(extensionId);
+          await saveUninstalledCorePlugins(uninstalled);
+        }
       }
       await saveDisabledCorePlugins(disabled);
     } else if (ext.type === "community") {

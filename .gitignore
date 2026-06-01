@@ -68,3 +68,6 @@ core-extensions/
 
 # Plugin repos cloned for local development
 plugins/
+
+# Local Electron user-data directory created during dev runs
+apps/electron/.voiden/

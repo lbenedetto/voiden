@@ -6,8 +6,9 @@ import { existsSync } from 'fs';
 export const pluginsRoot      = () => path.join(app.getPath('userData'), 'plugins');
 export const coreCacheDir     = () => path.join(pluginsRoot(), 'core');
 export const communityDir     = () => path.join(pluginsRoot(), 'community');
-export const coreDisabledPath = () => path.join(pluginsRoot(), 'core-disabled.json');
-export const githubCachePath  = () => path.join(pluginsRoot(), 'github-cache.json');
+export const coreDisabledPath    = () => path.join(pluginsRoot(), 'core-disabled.json');
+export const coreUninstalledPath = () => path.join(pluginsRoot(), 'core-uninstalled.json');
+export const githubCachePath     = () => path.join(pluginsRoot(), 'github-cache.json');
 
 /**
  * One-time migration: moves all plugin-related files from their old scattered

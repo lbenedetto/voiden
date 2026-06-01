@@ -231,7 +231,7 @@ const config: ForgeConfig = {
       const REGISTRY_URL = "https://raw.githubusercontent.com/VoidenHQ/plugin-registry/main/extensions.json";
       let registryEntries: any[] = [];
 
-      // Prefer the locally cloned registry repo (populated by setup-plugins.sh).
+      // Prefer the locally cloned registry repo (populated by cleanup.sh).
       // Fall back to a live GitHub fetch only when the clone is absent (e.g. CI).
       const localRegistryPath = path.join(__dirname, "../../plugins/plugin-registry/extensions.json");
       if (fs.existsSync(localRegistryPath)) {
@@ -291,7 +291,7 @@ const config: ForgeConfig = {
 
       // Build plugin bundles from plugins/ repos into each plugin's own dist/.
       // Then collect compatible ones into staging dirs for packaging.
-      // plugins/ is populated by cleanup.sh (clones repos) or setup-plugins.sh.
+      // plugins/ is populated by cleanup.sh (clones repos).
       const pluginsDir = path.join(__dirname, "../../plugins");
 
       // Staging dirs — cleared and repopulated each build
@@ -360,7 +360,7 @@ const config: ForgeConfig = {
           }
         }
       } else {
-        console.warn("plugins/ not found — no plugin bundles will be included (run setup-plugins.sh first)");
+        console.warn("plugins/ not found — no plugin bundles will be included (run cleanup.sh first)");
       }
 
       // Snapshot the registry so the packaged app has a reliable offline fallback.

@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import { proseClasses } from "@/core/editors/voiden/VoidenEditor";
 import { GitBranch, Loader2, Shield, Users, RefreshCw, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import { openExternalLink } from "@/core/lib/utils";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useInstallExtension,
   useUninstallExtension,
@@ -101,6 +102,7 @@ export const ExtensionDetails = ({
   const extensionData =
     allExtensions?.find((e: any) => e.id === initialExtensionData?.id) ?? initialExtensionData;
 
+  const queryClient = useQueryClient();
   const installMutation = useInstallExtension();
   const uninstallMutation = useUninstallExtension();
   const toggleEnabledMutation = useSetExtensionEnabled();
@@ -169,21 +171,68 @@ export const ExtensionDetails = ({
 
   const coreExtApi = () => (window as any).electron?.coreExtensions;
 
+  const invalidateCoreState = () =>
+    queryClient.invalidateQueries({ queryKey: ["extensions"] });
+
+  const activateBundled = async () => {
+    await window.electron?.extensions.reinstallCore?.(extensionData.id);
+    await invalidateCoreState();
+  };
+
   const handleInstallCore = async () => {
     setInstallingPlugin(extensionData.id, true);
     try {
+      // 1. Always try OTA first.
       const result = await coreExtApi()?.checkAndUpdate?.(extensionData.id);
+
       if (result?.updated?.length > 0) {
+        // OTA download succeeded — enable the plugin (also clears uninstalled state).
         await toggleEnabledMutation.mutateAsync({ extensionId: extensionData.id, enabled: true });
         setInstallingPlugin(extensionData.id, false);
         toast.success(`${extensionData.name} installed.`);
-      } else if (result?.error) {
-        setInstallingPlugin(extensionData.id, false);
-        toast.error(`Could not install: ${result.error}`);
-      } else {
-        setInstallingPlugin(extensionData.id, false);
-        toast.error(`Could not download ${extensionData.name}. Check your connection.`);
+        return;
       }
+
+      if (result?.incompatible?.includes(extensionData.id)) {
+        // Remote version requires a newer Voiden — fall back to bundled if available.
+        await activateBundled();
+        // Persist incompatibility badge in the query cache so the card and detail show it without re-fetching.
+        const details = result.incompatibleVersions?.[extensionData.id];
+        if (details) {
+          queryClient.setQueryData<any[]>(["extensions"], (old) =>
+            old?.map((e: any) =>
+              e.id === extensionData.id
+                ? { ...e, incompatibleLatestVersion: details.version, requiredVoidenVersion: details.requiredVoidenVersion }
+                : e
+            ) ?? old
+          );
+        }
+        setInstallingPlugin(extensionData.id, false);
+        const fresh = queryClient.getQueryData<any[]>(["extensions"])?.find((e: any) => e.id === extensionData.id);
+        if (fresh?.isLocallyAvailable) {
+          toast.warning(`Latest version of ${extensionData.name} requires a newer Voiden. Enabled bundled version.`);
+        } else {
+          toast.error(`${extensionData.name} requires a newer Voiden. Update the app to install.`);
+        }
+        return;
+      }
+
+      if (result?.error) {
+        // Network or other error — fall back to bundled if available.
+        await activateBundled();
+        setInstallingPlugin(extensionData.id, false);
+        const fresh = queryClient.getQueryData<any[]>(["extensions"])?.find((e: any) => e.id === extensionData.id);
+        if (fresh?.isLocallyAvailable) {
+          toast.warning(`Could not reach server. Enabled bundled version of ${extensionData.name}.`);
+        } else {
+          toast.error(`Could not download ${extensionData.name}. Check your connection.`);
+        }
+        return;
+      }
+
+      // upToDate with no updates — fall back to bundled.
+      await activateBundled();
+      setInstallingPlugin(extensionData.id, false);
     } catch {
       setInstallingPlugin(extensionData.id, false);
       toast.error("Install failed unexpectedly.");
@@ -234,8 +283,10 @@ export const ExtensionDetails = ({
   const handleUninstallCore = async () => {
     setIsUninstallingCore(true);
     try {
+      // deleteCache marks the plugin as uninstalled (clears isLocallyAvailable for bundled plugins too)
+      // and removes the OTA bundle. No need to call setEnabled separately.
       await coreExtApi()?.deleteCache?.(extensionData.id);
-      await toggleEnabledMutation.mutateAsync({ extensionId: extensionData.id, enabled: false });
+      await invalidateCoreState();
       toast.success(`${extensionData.name} removed. Click Install to re-download.`);
     } catch {
       toast.error("Failed to uninstall plugin.");
@@ -279,6 +330,13 @@ export const ExtensionDetails = ({
   const renderActions = () => {
     if (extensionData.type === "core") {
       if (!coreIsLocallyAvailable) {
+        if (extensionData.incompatibleLatestVersion) {
+          return (
+            <button disabled className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md bg-active/40 text-comment cursor-not-allowed border border-border">
+              Install
+            </button>
+          );
+        }
         return installingCorePlugins[extensionData.id] ? (
           <button disabled className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md bg-button-primary/40 text-bg/60 cursor-not-allowed">
             <Loader2 size={11} className="animate-spin" /> Installing...
@@ -393,7 +451,7 @@ export const ExtensionDetails = ({
                 </span>
               )}
               {hasIncompatibleUpdate && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded border border-amber-500/30 text-amber-400 bg-amber-500/10 font-medium">
+                <span className="text-[10px] px-1.5 py-0.5 rounded border border-border text-accent bg-bg font-medium">
                   v{updateInfo?.remoteVersion} — needs Voiden {updateInfo?.requiredAppVersion}
                 </span>
               )}
@@ -402,8 +460,8 @@ export const ExtensionDetails = ({
                   Update available to v{extensionData.latestVersion}
                 </span>
               )}
-              {extensionData.type === "community" && extensionData.incompatibleLatestVersion && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded border border-amber-500/30 text-amber-400 bg-amber-500/10 font-medium">
+              {extensionData.incompatibleLatestVersion && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded border border-border text-accent bg-bg font-medium">
                   v{extensionData.incompatibleLatestVersion} — needs Voiden {extensionData.requiredVoidenVersion}
                 </span>
               )}

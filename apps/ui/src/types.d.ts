@@ -353,6 +353,7 @@ declare global {
         openDetails: (extension: any) => Promise<any>;
         update: (extensionId: string) => Promise<any>;
         updateCoreMeta: (pluginId: string, meta: Record<string, any>) => Promise<void>;
+        reinstallCore: (pluginId: string) => Promise<{ success: boolean }>;
       };
       ipc: {
         on: (

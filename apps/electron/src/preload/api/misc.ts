@@ -136,7 +136,7 @@ export const coreExtensionsApi = {
 
   /** Checks each plugin's own repo for updates, downloads changed plugins.
    *  Pass a pluginId to scope the check to a single plugin. */
-  checkAndUpdate: (pluginId?: string): Promise<{ updated: string[]; upToDate: boolean; incompatible: string[]; error?: string }> =>
+  checkAndUpdate: (pluginId?: string): Promise<{ updated: string[]; upToDate: boolean; incompatible: string[]; incompatibleVersions: { [id: string]: { version: string; requiredVoidenVersion: string } }; error?: string }> =>
     ipcRenderer.invoke("coreExtensions:checkAndUpdate", pluginId),
 
   /** Read a cached plugin bundle as a UTF-8 string (for Blob URL import). */
