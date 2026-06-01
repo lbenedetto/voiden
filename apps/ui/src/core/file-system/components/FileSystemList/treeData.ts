@@ -1,4 +1,4 @@
-import React from "react";
+import { MutableRefObject } from "react";
 import { NodeApi } from "react-arborist";
 import { ExtendedFileTree } from "./types";
 
@@ -67,7 +67,7 @@ export function findNodeByPath(
 export function ensureFolderExpanded(
   folderNode: NodeApi<ExtendedFileTree> | null | undefined,
   path: string,
-  expandedDirsRef: React.MutableRefObject<Set<string>>,
+  expandedDirsRef: MutableRefObject<Set<string>>,
 ) {
   if (!folderNode) return;
   if (!folderNode.isOpen) {

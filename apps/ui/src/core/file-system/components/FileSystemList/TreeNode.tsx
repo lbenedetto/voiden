@@ -1,4 +1,5 @@
 import React, { useContext, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import { NodeApi, NodeRendererProps, TreeApi } from "react-arborist";
 import { Tip } from "@/core/components/ui/Tip";
@@ -63,6 +64,7 @@ export function TreeNode({
   const { expandAllRecursive, collapseAllFromFolder } = useContext(TreeActionsContext);
   const setIsRenaming = useFocusStore((state) => state.setIsRenaming);
   const { mutate: activateTab } = useActivateTab();
+  const queryClient = useQueryClient();
 
   const isInternalDropTargetFolder = node.data.type === "folder" && Boolean(node.willReceiveDrop);
 
@@ -205,6 +207,7 @@ export function TreeNode({
 
       if (folderPaths.length > 0) {
         await refreshDir(targetPath);
+        await queryClient.invalidateQueries({ queryKey: ["env"] });
       }
 
       if (targetFolder.data.type === "folder" && !targetFolder.isOpen) {
